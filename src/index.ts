@@ -2,7 +2,7 @@ import { defineModule } from '@directus/extensions-sdk'
 
 import ModuleComponent from './module.vue'
 
-export default defineModule({
+export const moduleExport = defineModule({
   id: 'module-export',
   name: 'Export & import collections',
   icon: 'file_download',
@@ -13,4 +13,6 @@ export default defineModule({
     },
   ],
 })
+
+export default moduleExport
 
