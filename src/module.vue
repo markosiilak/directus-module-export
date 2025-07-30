@@ -1,0 +1,770 @@
+<template>
+  <private-view title="Import/Push Collection Data">
+    <template #sidebar>
+      <sidebar-detail icon="info" title="Information" close>
+        <div class="page-description" />
+      </sidebar-detail>
+    </template>
+    <div class="content-wrapper">
+      <p>This module allows you to import and push collection data to/from another server.</p>
+      <div>
+        <div class="domain-selector">
+          <div class="api-inputs">
+            <div class="input-group">
+              <component
+                :is="domainInputMode === 'select' ? 'v-select' : 'v-input'"
+                v-model="selectedDomain"
+                :items="domainInputMode === 'select' ? domainHistory : undefined"
+                :filter="domainInputMode === 'select' ? customFilter : undefined"
+                placeholder="Enter server API URL"
+                :disabled="loadingStates['import']"
+                class="domain-input"
+                :searchable="domainInputMode === 'select'"
+                :allow-input="domainInputMode === 'select'"
+                @update:model-value="handleDomainSelect" />
+              <v-button small secondary icon="true" @click="toggleDomainInputMode">
+                <v-icon :name="domainInputMode === 'select' ? 'edit' : 'list'" />
+              </v-button>
+            </div>
+            <div class="input-group">
+              <component
+                :is="tokenInputMode === 'select' ? 'v-select' : 'v-input'"
+                v-model="adminToken"
+                :items="tokenInputMode === 'select' ? tokenHistory : undefined"
+                :filter="tokenInputMode === 'select' ? customFilter : undefined"
+                placeholder="Enter admin token"
+                type="password"
+                :disabled="loadingStates['import']"
+                class="token-input"
+                :searchable="tokenInputMode === 'select'"
+                :allow-input="tokenInputMode === 'select'"
+                @update:model-value="handleTokenSelect" />
+              <v-button small secondary icon="true" @click="toggleTokenInputMode">
+                <v-icon :name="tokenInputMode === 'select' ? 'edit' : 'list'" />
+              </v-button>
+            </div>
+          </div>
+
+          <v-button small secondary :loading="loadingStates['token_validation']" @click="validateToken">
+            <v-icon name="verified_user" left />
+            Validate Token
+          </v-button>
+
+          <div v-if="domainHistory.length > 0 || tokenHistory.length > 0" class="history-buttons">
+            <v-button v-if="domainHistory.length > 0" small secondary @click="clearDomainHistory">
+              <v-icon name="delete" left />
+              Clear Domain History
+            </v-button>
+            <v-button v-if="tokenHistory.length > 0" small secondary @click="clearTokenHistory">
+              <v-icon name="delete" left />
+              Clear Token History
+            </v-button>
+          </div>
+          <v-notice v-if="adminToken" type="info" class="token-info">
+            Make sure your admin token has read/write permissions for the target collections
+          </v-notice>
+        </div>
+
+        <div v-if="operationStatus" class="status-display" :class="operationStatus.type">
+          <v-notice :type="operationStatus.type">
+            Status: {{ operationStatus.status }} - {{ operationStatus.message }}
+          </v-notice>
+        </div>
+
+        <div v-for="collection in collections" :key="collection.collection" class="api-buttons">
+          <h2 class="title type-title uppercase">{{ collection.collection }}</h2>
+          <div>
+            <v-button
+              small
+              warning="true"
+              :loading="loadingStates[`import_api_${collection.collection}`]"
+              :disabled="!selectedDomain || !adminToken"
+              @click="importFromApi(collection.collection)">
+              <v-icon name="cloud_download" left />
+              Import from API
+            </v-button>
+          </div>
+          <div class="collection-buttons">
+            <v-button
+              small
+              warning="true"
+              :loading="loadingStates[`import_${collection.collection}`]"
+              :disabled="!selectedDomain || !adminToken"
+              @click="importFromLive(collection.collection)">
+              <v-icon name="cloud_download" left />
+              Import from another Directus
+            </v-button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </private-view>
+</template>
+
+<script lang="ts">
+  import { useApi } from '@directus/extensions-sdk';
+  import { defineComponent, onMounted, ref, watch } from 'vue';
+
+  const syncPushSuccess = ref(false);
+
+  interface ApiError {
+    message?: string
+    response?: {
+      data?: {
+        message?: string
+        error?: string
+        details?: unknown
+        success?: boolean
+        data?: unknown
+      }
+      status?: number
+    }
+  }
+
+  interface ImportLogEntry {
+    timestamp: string;
+    step: string;
+    details: Record<string, unknown>;
+  }
+
+  export default defineComponent({
+    name: 'ImportPushCollections',
+    setup() {
+      const api = useApi();
+      const collections = ref<any[]>([]);
+      const loadingStates = ref<Record<string, boolean>>({
+        import: false,
+        import_api: false,
+        push: false,
+        push_api: false,
+        token_validation: false
+      });
+      const selectedDomain = ref(localStorage.getItem('selectedDomain') || '');
+      const adminToken = ref(localStorage.getItem('adminToken') || '');
+      const domainHistory = ref<string[]>([]);
+      const tokenHistory = ref<string[]>([]);
+      const domainInputMode = ref<'select' | 'input'>(localStorage.getItem('domainInputMode') as 'select' | 'input' || 'select');
+      const tokenInputMode = ref<'select' | 'input'>(localStorage.getItem('tokenInputMode') as 'select' | 'input' || 'select');
+      const needsReload = ref(false);
+      const operationStatus = ref<{ status?: number; message: string; type: 'info' | 'success' | 'warning' | 'error' } | null>(null);
+
+      // Load histories from localStorage on mount
+      onMounted(async () => {
+        const savedDomainHistory = localStorage.getItem('domainHistory');
+        const savedTokenHistory = localStorage.getItem('tokenHistory');
+        if (savedDomainHistory) {
+          domainHistory.value = JSON.parse(savedDomainHistory);
+        }
+        if (savedTokenHistory) {
+          // Decrypt tokens if they were encrypted
+          try {
+            tokenHistory.value = JSON.parse(savedTokenHistory);
+          } catch (e) {
+            console.warn('Failed to parse token history, starting fresh');
+            tokenHistory.value = [];
+          }
+        }
+        console.log(
+          'Initial selectedDomain from localStorage:',
+          localStorage.getItem('selectedDomain')
+        );
+        console.log('Current selectedDomain ref value:', selectedDomain.value);
+
+        // Fetch collections when component mounts
+        await fetchCollections();
+      });
+
+      // Custom filter for domain selection
+      const customFilter = (item: string, queryText: string) => {
+        const text = item.toLowerCase();
+        const query = queryText.toLowerCase();
+        return text.indexOf(query) > -1;
+      };
+
+      // Handle domain selection
+      const handleDomainSelect = (value: string) => {
+        if (value && !domainHistory.value.includes(value)) {
+          domainHistory.value.unshift(value);
+          // Keep only last 10 domains
+          if (domainHistory.value.length > 10) {
+            domainHistory.value.pop();
+          }
+          localStorage.setItem('domainHistory', JSON.stringify(domainHistory.value));
+        }
+      };
+
+      // Handle token selection
+      const handleTokenSelect = (value: string) => {
+        if (value) {
+          const formattedToken = value.startsWith('Bearer ') ? value : `Bearer ${value}`;
+          // Only add to history if it's not already there
+          if (!tokenHistory.value.includes(formattedToken)) {
+            tokenHistory.value.unshift(formattedToken);
+            // Keep only last 5 tokens for security
+            if (tokenHistory.value.length > 5) {
+              tokenHistory.value.pop();
+            }
+            localStorage.setItem('tokenHistory', JSON.stringify(tokenHistory.value));
+          }
+          adminToken.value = formattedToken;
+        }
+      };
+
+      // Clear domain history
+      const clearDomainHistory = () => {
+        domainHistory.value = [];
+        localStorage.removeItem('domainHistory');
+      };
+
+      // Clear token history
+      const clearTokenHistory = () => {
+        tokenHistory.value = [];
+        localStorage.removeItem('tokenHistory');
+      };
+
+      // Toggle input modes
+      const toggleDomainInputMode = () => {
+        domainInputMode.value = domainInputMode.value === 'select' ? 'input' : 'select';
+        localStorage.setItem('domainInputMode', domainInputMode.value);
+      };
+
+      const toggleTokenInputMode = () => {
+        tokenInputMode.value = tokenInputMode.value === 'select' ? 'input' : 'select';
+        localStorage.setItem('tokenInputMode', tokenInputMode.value);
+      };
+
+      // Watch for changes in selectedDomain and adminToken
+      watch([selectedDomain, adminToken], ([newDomain, newToken]) => {
+        console.log('Saving credentials to localStorage');
+        localStorage.setItem('selectedDomain', newDomain);
+
+        if (newDomain && !domainHistory.value.includes(newDomain)) {
+          domainHistory.value.unshift(newDomain);
+          if (domainHistory.value.length > 10) {
+            domainHistory.value.pop();
+          }
+          localStorage.setItem('domainHistory', JSON.stringify(domainHistory.value));
+        }
+
+        if (newToken) {
+          const formattedToken = newToken.startsWith('Bearer ') ? newToken : `Bearer ${newToken}`;
+          localStorage.setItem('adminToken', formattedToken);
+          adminToken.value = formattedToken;
+
+          // Only add to history if in select mode
+          if (tokenInputMode.value === 'select' && !tokenHistory.value.includes(formattedToken)) {
+            tokenHistory.value.unshift(formattedToken);
+            if (tokenHistory.value.length > 5) {
+              tokenHistory.value.pop();
+            }
+            localStorage.setItem('tokenHistory', JSON.stringify(tokenHistory.value));
+          }
+        } else {
+          localStorage.removeItem('adminToken');
+        }
+      });
+
+      watch(needsReload, value => value && window.location.reload());
+
+      const setLoading = (operation: string, collection: string, state: boolean) => {
+        loadingStates.value[operation] = state;
+        if (collection) {
+          loadingStates.value[`${operation}_${collection}`] = state;
+        }
+      };
+
+      const fetchCollections = async () => {
+        try {
+          const response = await api.get('/collections');
+          console.log('All collections:', response.data.data);
+
+          const excludedPatterns = [
+            '_translations',
+            '_languages',
+            '_extensions',
+            '_operations',
+            '_shares',
+            '_fields',
+            '_migrations',
+            '_versions',
+            '_notifications',
+            '_sessions',
+            '_sync_id',
+          ];
+
+          const filteredCollections = response.data.data.filter((collection: any) => {
+            const isExcluded = excludedPatterns.some(pattern => collection.collection.includes(pattern));
+            const isFolder = collection.meta?.is_folder;
+            console.log('Collection:', collection.collection, {
+              isExcluded,
+              isFolder,
+              meta: collection.meta
+            });
+            return !isExcluded && !isFolder;
+          });
+
+          console.log('Filtered collections:', filteredCollections);
+          collections.value = filteredCollections;
+        } catch (error) {
+          console.error('Error fetching collections:', error);
+        }
+      };
+
+      const syncPush = async () => {
+        try {
+          await api.get(`/api/directus/collections/push`);
+          syncPushSuccess.value = true;
+          setTimeout(() => {
+            syncPushSuccess.value = false;
+          }, 5000);
+        } catch (error) {
+          console.error('Error syncing:', error);
+        }
+      };
+
+      const syncPushMigrate = async () => {
+        try {
+          await api.get(`/api/directus/collections/migrate`);
+          syncPushSuccess.value = true;
+          setTimeout(() => {
+            syncPushSuccess.value = false;
+          }, 5000);
+        } catch (error) {
+          console.error('Error syncing:', error);
+        }
+      };
+
+      const validateToken = async () => {
+        if (!selectedDomain.value || !adminToken.value) {
+          alert('Please enter both server URL and admin token');
+          return false;
+        }
+
+        try {
+          setLoading('token_validation', '', true);
+          operationStatus.value = null;
+          // Ensure token is properly formatted
+          const token = adminToken.value.startsWith('Bearer ')
+            ? adminToken.value
+            : `Bearer ${adminToken.value}`;
+
+          // Use the server-side validation endpoint
+          const response = await api.post('/api/directus/validate/token', {
+            selectedDomain: selectedDomain.value,
+            adminToken: token,
+          });
+
+          if (response.data.success) {
+            operationStatus.value = {
+              status: response.status,
+              message: `Token validated successfully! Server Info: Version: ${response.data.serverInfo.version}, Project: ${response.data.serverInfo.project}`,
+              type: 'success'
+            };
+            return true;
+          } else {
+            throw new Error(response.data.message || 'Token validation failed');
+          }
+        } catch (error: any) {
+          console.error('Token validation error:', {
+            message: error.message,
+            status: error.response?.status,
+            statusText: error.response?.statusText,
+            details: error.response?.data,
+          });
+
+          operationStatus.value = {
+            status: error.response?.status,
+            message: error.response?.data?.message || error.message || 'Token validation failed',
+            type: 'error'
+          };
+
+          // Provide specific error messages based on the response
+          if (error.response?.status === 401) {
+            operationStatus.value.message = 'Authentication Error: The token is not valid for the target server. Please ensure you are using the correct token and server URL.';
+          } else if (error.response?.status === 403) {
+            operationStatus.value.message = 'Permission Error: The token does not have sufficient permissions. Please ensure you are using an admin token with read/write access.';
+          }
+          return false;
+        } finally {
+          setLoading('token_validation', '', false);
+        }
+      };
+
+      const importFromLive = async (collectionName: string) => {
+        if (!selectedDomain.value || !adminToken.value) {
+          console.error('API URL and admin token are required for external API access');
+          operationStatus.value = {
+            status: 400,
+            message: 'API URL and admin token are required for external API access',
+            type: 'error'
+          };
+          return;
+        }
+
+        try {
+          setLoading('import', collectionName, true);
+          operationStatus.value = null;
+
+          // Ensure token is properly formatted
+          const token = adminToken.value.startsWith('Bearer ')
+            ? adminToken.value
+            : `Bearer ${adminToken.value}`;
+
+          // Use the new import-from-directus endpoint
+          const response = await api.post('/api/directus/import-from-directus/' + collectionName, {
+            sourceUrl: selectedDomain.value,
+            sourceToken: token,
+          });
+
+          if (response.data.success) {
+            // Calculate success/failure statistics
+            const importedItems = response.data.importedItems || [];
+            const successful = importedItems.filter((item: any) => item.status !== 'error').length;
+            const failed = importedItems.filter((item: any) => item.status === 'error').length;
+
+            // If the collection is empty, show a different message
+            if (response.data.message?.includes('empty')) {
+              operationStatus.value = {
+                status: response.status,
+                message: response.data.message,
+                type: 'info'
+              };
+            } else {
+              operationStatus.value = {
+                status: response.status,
+                message: `Successfully imported ${successful} items from ${collectionName} (${failed} failed)`,
+                type: failed > 0 ? 'warning' : 'success'
+              };
+            }
+
+            // If there were any failures, show them in the console
+            if (failed > 0) {
+              const failedItems = importedItems.filter((item: any) => item.status === 'error');
+              console.warn('Some items failed to import:', failedItems);
+            }
+
+            console.log('Import response:', response.data);
+            return;
+          }
+
+          if (!response.data.success) {
+            const errorMessage = response.data.message || `Failed to import ${collectionName}`;
+            const errorDetails = response.data.details || 'No additional details available';
+            const importLog = response.data.importLog || [];
+
+            // Log the full error details for debugging
+            console.error('Import failed:', {
+              message: errorMessage,
+              details: errorDetails,
+              importLog
+            });
+
+            // Find the last error in the import log if available
+            const lastError = importLog.find((log: ImportLogEntry) => log.step === 'fatal_error' || log.step === 'error');
+            const detailedMessage = lastError
+              ? `${errorMessage} - ${JSON.stringify(lastError.details)}`
+              : errorMessage;
+
+            throw new Error(detailedMessage);
+          }
+        } catch (error: unknown) {
+          console.error('Error importing from live server:', error);
+          const apiError = error as ApiError;
+          const errorMessage = apiError.response?.data?.message || apiError.message || 'Unknown error occurred';
+          const errorDetails = apiError.response?.data?.details || 'No additional details available';
+
+          operationStatus.value = {
+            status: apiError.response?.status || 500,
+            message: `${errorMessage}${errorDetails ? ` - ${errorDetails}` : ''}`,
+            type: 'error'
+          };
+
+          // Show a more detailed error alert
+          alert(
+            `Import failed for ${collectionName}:\n\n` +
+              `Error: ${errorMessage}\n` +
+              `Details: ${errorDetails}\n\n` +
+              'Please check:\n' +
+              '1. The server URL is correct\n' +
+              '2. The collection exists on the source server\n' +
+              '3. The admin token has proper permissions\n' +
+              '4. The source server is accessible'
+          );
+        } finally {
+          setLoading('import', collectionName, false);
+        }
+      };
+
+      const importFromApi = async (collectionName: string) => {
+        if (!selectedDomain.value || !adminToken.value) {
+          console.error('API URL and admin token are required for external API access');
+          operationStatus.value = {
+            status: 400,
+            message: 'API URL and admin token are required for external API access',
+            type: 'error'
+          };
+          return;
+        }
+
+        setLoading('import_api', collectionName, true);
+        operationStatus.value = null;
+        try {
+          // Ensure token is properly formatted
+          const token = adminToken.value.startsWith('Bearer ')
+            ? adminToken.value
+            : `Bearer ${adminToken.value}`;
+
+          // Use different endpoint for invoice collection
+          const endpoint = collectionName === 'invoice'
+            ? '/api/directus/import/invoice'
+            : '/api/directus/import/' + collectionName;
+
+          console.log('Importing from API:', {
+            selectedDomain: selectedDomain.value,
+            collection: collectionName,
+            endpoint
+          });
+
+          // Prepare request body based on collection type
+          const requestBody = collectionName === 'invoice'
+            ? { url: selectedDomain.value }
+            : {
+              selectedDomain: selectedDomain.value,
+              collection: collectionName,
+              adminToken: token,
+            };
+
+          const response = await api.post(
+            endpoint,
+            requestBody,
+            {
+              headers: {
+                'Content-Type': 'application/json',
+              },
+            }
+          );
+
+          if (!response.data.success) {
+            const errorMessage = response.data.message || `Failed to import ${collectionName}`;
+            const errorDetails = response.data.details || 'No additional details available';
+            const importLog = response.data.importLog || [];
+
+            // Log the full error details for debugging
+            console.error('Import failed:', {
+              message: errorMessage,
+              details: errorDetails,
+              importLog
+            });
+
+            // Find the last error in the import log if available
+            const lastError = importLog.find((log: ImportLogEntry) => log.step === 'fatal_error' || log.step === 'error');
+            const detailedMessage = lastError
+              ? `${errorMessage} - ${JSON.stringify(lastError.details)}`
+              : errorMessage;
+
+            throw new Error(detailedMessage);
+          }
+
+          operationStatus.value = {
+            status: response.status,
+            message: `Successfully imported ${collectionName} from API`,
+            type: 'success'
+          };
+          console.log('Import response:', response.data);
+        } catch (error: unknown) {
+          console.error('Error importing from API:', error);
+          const apiError = error as ApiError;
+          const errorMessage = apiError.response?.data?.message || apiError.message || 'Unknown error occurred';
+          const errorDetails = apiError.response?.data?.details || 'No additional details available';
+
+          operationStatus.value = {
+            status: apiError.response?.status || 500,
+            message: `${errorMessage}${errorDetails ? ` - ${errorDetails}` : ''}`,
+            type: 'error'
+          };
+
+          // Show a more detailed error alert
+          alert(
+            `Import failed for ${collectionName}:\n\n` +
+              `Error: ${errorMessage}\n` +
+              `Details: ${errorDetails}\n\n` +
+              'Please check:\n' +
+              '1. The server URL is correct\n' +
+              '2. The collection exists on the source server\n' +
+              '3. The admin token has proper permissions\n' +
+              '4. The source server is accessible'
+          );
+        } finally {
+          setLoading('import_api', collectionName, false);
+        }
+      };
+
+      // Return all the reactive state and methods that are used in the template
+      return {
+        api,
+        collections,
+        loadingStates,
+        selectedDomain,
+        adminToken,
+        domainHistory,
+        tokenHistory,
+        domainInputMode,
+        tokenInputMode,
+        needsReload,
+        operationStatus,
+        customFilter,
+        handleDomainSelect,
+        handleTokenSelect,
+        clearDomainHistory,
+        clearTokenHistory,
+        toggleDomainInputMode,
+        toggleTokenInputMode,
+        validateToken,
+        syncPush,
+        syncPushMigrate,
+        importFromLive,
+        importFromApi,
+        setLoading
+      };
+    }
+  });
+</script>
+
+<style scoped>
+.uppercase::first-letter {
+  text-transform: uppercase;
+}
+
+.content-wrapper {
+  padding-left: 40px;
+  padding-right: 20px;
+}
+
+.v-notice {
+  margin-top: 4px;
+  margin-bottom: 4px;
+}
+
+p {
+  margin-bottom: 20px;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.v-button {
+  margin-right: 4px;
+  margin-bottom: 4px;
+  margin-top: 4px;
+  text-align: center;
+}
+
+.api-inputs {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.input-group {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.api-inputs>* {
+  flex: 1;
+}
+
+.api-buttons {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.collection-buttons {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+}
+
+.api-url-input {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.api-url-input .v-input {
+  flex: 1;
+}
+
+.domain-input {
+  flex: 1;
+  margin-bottom: 12px;
+}
+
+.token-input {
+  flex: 1;
+  margin-bottom: 12px;
+}
+
+.domain-selector {
+  margin-bottom: 20px;
+}
+
+.token-info {
+  margin-top: 8px;
+  font-size: 14px;
+}
+
+@media (max-width: 768px) {
+  .content-wrapper {
+    padding: 15px;
+  }
+
+  p {
+    font-size: 14px;
+  }
+
+  .v-button {
+    width: 100%;
+    margin-right: 0;
+  }
+
+  .api-inputs {
+    flex-direction: column;
+  }
+
+  .api-url-input .v-input,
+  .domain-input,
+  .token-input {
+    width: 100%;
+  }
+
+  .collection-buttons {
+    flex-direction: column;
+  }
+}
+
+.status-display {
+  margin: 12px 0;
+}
+
+.status-display.success {
+  color: var(--success);
+}
+
+.status-display.error {
+  color: var(--danger);
+}
+
+.status-display.warning {
+  color: var(--warning);
+}
+
+.status-display.info {
+  color: var(--primary);
+}
+</style>

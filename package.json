@@ -1,0 +1,59 @@
+{
+  "name": "directus-module-export",
+  "version": "1.0.0",
+  "description": "Directus module for importing and exporting collection data between servers",
+  "keywords": [
+    "directus",
+    "directus-extension",
+    "directus-extension-module",
+    "export",
+    "import",
+    "data-migration",
+    "api"
+  ],
+  "author": {
+    "name": "Your Name",
+    "email": "your.email@example.com"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/markosiilak/directus-module-export.git"
+  },
+  "bugs": {
+    "url": "https://github.com/markosiilak/directus-module-export/issues"
+  },
+  "homepage": "https://github.com/markosiilak/directus-module-export#readme",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "directus:extension": {
+    "type": "module",
+    "path": "dist/index.js",
+    "source": "src/index.ts",
+    "host": "^10.10.0"
+  },
+  "scripts": {
+    "build": "directus-extension build",
+    "dev": "directus-extension build -w --no-minify",
+    "link": "directus-extension link",
+    "prepublishOnly": "npm run build",
+    "test": "echo \"Error: no test specified\" && exit 0",
+    "lint": "echo \"No linting configured\" && exit 0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "peerDependencies": {
+    "@directus/extensions-sdk": "^10.10.0"
+  },
+  "devDependencies": {
+    "@directus/extensions-sdk": "^10.10.0",
+    "typescript": "^4.9.0"
+  }
+}
