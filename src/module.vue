@@ -103,42 +103,149 @@
 
 <script lang="ts">
   import { useApi } from '@directus/extensions-sdk';
-  import { defineComponent, onMounted, ref, watch } from 'vue';
-  import { validateDirectusToken, importFromDirectus, importFromExternalApi } from './utils/apiHandlers';
-  import type { ApiError, ImportLogEntry } from './types';
+  import { defineComponent, onMounted, ref, watch, Ref } from 'vue';
+  import { validateDirectusToken, importFromDirectus, importFromExternalApi, importCollectionHandler } from './utils/apiHandlers';
 
-  const syncPushSuccess = ref(false);
+  // Type definitions
+  interface ApiError {
+    message?: string;
+    response?: {
+      data?: {
+        message?: string;
+        error?: string;
+        details?: unknown;
+        success?: boolean;
+        data?: unknown;
+      };
+      status?: number;
+    };
+  }
+
+  interface ImportLogEntry {
+    timestamp: string;
+    step: string;
+    details: Record<string, unknown>;
+  }
+
+  interface Collection {
+    collection: string;
+    meta?: {
+      is_folder?: boolean;
+      [key: string]: unknown;
+    };
+    [key: string]: unknown;
+  }
+
+  interface OperationStatus {
+    status?: number;
+    message: string;
+    type: 'info' | 'success' | 'warning' | 'error';
+  }
+
+  interface LoadingStates {
+    import: boolean;
+    import_api: boolean;
+    push: boolean;
+    push_api: boolean;
+    token_validation: boolean;
+    [key: string]: boolean;
+  }
+
+  interface ImportedItem {
+    originalId: string | number;
+    newId?: string | number;
+    status: 'success' | 'error';
+    data?: any;
+    error?: {
+      message: string;
+      status?: number;
+      details?: any;
+    };
+  }
+
+  interface ImportResult {
+    success: boolean;
+    message: string;
+    importedItems?: ImportedItem[];
+    error?: any;
+    importLog?: ImportLogEntry[];
+  }
+
+  interface ValidationResult {
+    success: boolean;
+    message: string;
+    serverInfo?: {
+      version: string;
+      project: string;
+    };
+    error?: any;
+  }
+
+  type InputMode = 'select' | 'input';
+
+  const syncPushSuccess = ref<boolean>(false);
 
   export default defineComponent({
     name: 'ImportPushCollections',
-    setup(): any {
+    setup(): {
+      api: any;
+      collections: Ref<Collection[]>;
+      loadingStates: Ref<LoadingStates>;
+      selectedDomain: Ref<string>;
+      adminToken: Ref<string>;
+      domainHistory: Ref<string[]>;
+      tokenHistory: Ref<string[]>;
+      domainInputMode: Ref<InputMode>;
+      tokenInputMode: Ref<InputMode>;
+      needsReload: Ref<boolean>;
+      operationStatus: Ref<OperationStatus | null>;
+      customFilter: (item: string, queryText: string) => boolean;
+      handleDomainSelect: (value: string) => void;
+      handleTokenSelect: (value: string) => void;
+      clearDomainHistory: () => void;
+      clearTokenHistory: () => void;
+      toggleDomainInputMode: () => void;
+      toggleTokenInputMode: () => void;
+      validateToken: () => Promise<boolean>;
+      syncPush: () => Promise<void>;
+      syncPushMigrate: () => Promise<void>;
+      importFromLive: (collectionName: string) => Promise<void>;
+      importFromApi: (collectionName: string) => Promise<void>;
+      setLoading: (operation: string, collection: string, state: boolean) => void;
+    } {
       const api = useApi();
-      const collections = ref<any[]>([]);
-      const loadingStates = ref<Record<string, boolean>>({
+      const collections = ref<Collection[]>([]);
+      const loadingStates = ref<LoadingStates>({
         import: false,
         import_api: false,
         push: false,
         push_api: false,
         token_validation: false
       });
-      const selectedDomain = ref(localStorage.getItem('selectedDomain') || '');
-      const adminToken = ref(localStorage.getItem('adminToken') || '');
+      const selectedDomain = ref<string>(localStorage.getItem('selectedDomain') || '');
+      const adminToken = ref<string>(localStorage.getItem('adminToken') || '');
       const domainHistory = ref<string[]>([]);
       const tokenHistory = ref<string[]>([]);
-      const domainInputMode = ref<'select' | 'input'>(localStorage.getItem('domainInputMode') as 'select' | 'input' || 'select');
-      const tokenInputMode = ref<'select' | 'input'>(localStorage.getItem('tokenInputMode') as 'select' | 'input' || 'select');
-      const needsReload = ref(false);
-      const operationStatus = ref<{ status?: number; message: string; type: 'info' | 'success' | 'warning' | 'error' } | null>(null);
+      const domainInputMode = ref<InputMode>((localStorage.getItem('domainInputMode') as InputMode) || 'select');
+      const tokenInputMode = ref<InputMode>((localStorage.getItem('tokenInputMode') as InputMode) || 'select');
+      const needsReload = ref<boolean>(false);
+      const operationStatus = ref<OperationStatus | null>(null);
 
       // Load histories from localStorage on mount
-      onMounted(async () => {
+      onMounted(async (): Promise<void> => {
         const savedDomainHistory = localStorage.getItem('domainHistory');
         const savedTokenHistory = localStorage.getItem('tokenHistory');
+        
         if (savedDomainHistory) {
-          domainHistory.value = JSON.parse(savedDomainHistory);
+          try {
+            domainHistory.value = JSON.parse(savedDomainHistory);
+          } catch (e) {
+            console.warn('Failed to parse domain history, starting fresh');
+            domainHistory.value = [];
+          }
         }
+        
         if (savedTokenHistory) {
-          // Decrypt tokens if they were encrypted
           try {
             tokenHistory.value = JSON.parse(savedTokenHistory);
           } catch (e) {
@@ -146,6 +253,7 @@
             tokenHistory.value = [];
           }
         }
+        
         console.log(
           'Initial selectedDomain from localStorage:',
           localStorage.getItem('selectedDomain')
@@ -157,14 +265,14 @@
       });
 
       // Custom filter for domain selection
-      const customFilter = (item: string, queryText: string) => {
+      const customFilter = (item: string, queryText: string): boolean => {
         const text = item.toLowerCase();
         const query = queryText.toLowerCase();
         return text.indexOf(query) > -1;
       };
 
       // Handle domain selection
-      const handleDomainSelect = (value: string) => {
+      const handleDomainSelect = (value: string): void => {
         if (value && !domainHistory.value.includes(value)) {
           domainHistory.value.unshift(value);
           // Keep only last 10 domains
@@ -176,7 +284,7 @@
       };
 
       // Handle token selection
-      const handleTokenSelect = (value: string) => {
+      const handleTokenSelect = (value: string): void => {
         if (value) {
           const formattedToken = value.startsWith('Bearer ') ? value : `Bearer ${value}`;
           // Only add to history if it's not already there
@@ -193,30 +301,30 @@
       };
 
       // Clear domain history
-      const clearDomainHistory = () => {
+      const clearDomainHistory = (): void => {
         domainHistory.value = [];
         localStorage.removeItem('domainHistory');
       };
 
       // Clear token history
-      const clearTokenHistory = () => {
+      const clearTokenHistory = (): void => {
         tokenHistory.value = [];
         localStorage.removeItem('tokenHistory');
       };
 
       // Toggle input modes
-      const toggleDomainInputMode = () => {
+      const toggleDomainInputMode = (): void => {
         domainInputMode.value = domainInputMode.value === 'select' ? 'input' : 'select';
         localStorage.setItem('domainInputMode', domainInputMode.value);
       };
 
-      const toggleTokenInputMode = () => {
+      const toggleTokenInputMode = (): void => {
         tokenInputMode.value = tokenInputMode.value === 'select' ? 'input' : 'select';
         localStorage.setItem('tokenInputMode', tokenInputMode.value);
       };
 
       // Watch for changes in selectedDomain and adminToken
-      watch([selectedDomain, adminToken], ([newDomain, newToken]) => {
+      watch([selectedDomain, adminToken], ([newDomain, newToken]: [string, string]): void => {
         console.log('Saving credentials to localStorage');
         localStorage.setItem('selectedDomain', newDomain);
 
@@ -246,21 +354,36 @@
         }
       });
 
-      watch(needsReload, value => value && window.location.reload());
+      watch(needsReload, (value: boolean): void => {
+        if (value) {
+          // Use a more reliable way to reload in Directus admin context
+          try {
+            window.location.reload();
+          } catch (error) {
+            console.warn('Could not reload page automatically:', error);
+            // Fallback: show a message to the user
+            operationStatus.value = {
+              status: 200,
+              message: 'Changes applied. Please refresh the page manually if needed.',
+              type: 'info'
+            };
+          }
+        }
+      });
 
-      const setLoading = (operation: string, collection: string, state: boolean) => {
+      const setLoading = (operation: string, collection: string, state: boolean): void => {
         loadingStates.value[operation] = state;
         if (collection) {
           loadingStates.value[`${operation}_${collection}`] = state;
         }
       };
 
-      const fetchCollections = async () => {
+      const fetchCollections = async (): Promise<void> => {
         try {
           const response = await api.get('/collections');
           console.log('All collections:', response.data.data);
 
-          const excludedPatterns = [
+          const excludedPatterns: string[] = [
             '_translations',
             '_languages',
             '_extensions',
@@ -274,8 +397,8 @@
             '_sync_id',
           ];
 
-          const filteredCollections = response.data.data.filter((collection: any) => {
-            const isExcluded = excludedPatterns.some(pattern => collection.collection.includes(pattern));
+          const filteredCollections = response.data.data.filter((collection: Collection): boolean => {
+            const isExcluded = excludedPatterns.some((pattern: string) => collection.collection.includes(pattern));
             const isFolder = collection.meta?.is_folder;
             console.log('Collection:', collection.collection, {
               isExcluded,
@@ -292,7 +415,7 @@
         }
       };
 
-      const syncPush = async () => {
+      const syncPush = async (): Promise<void> => {
         try {
           await api.get(`/api/directus/collections/push`);
           syncPushSuccess.value = true;
@@ -304,7 +427,7 @@
         }
       };
 
-      const syncPushMigrate = async () => {
+      const syncPushMigrate = async (): Promise<void> => {
         try {
           await api.get(`/api/directus/collections/migrate`);
           syncPushSuccess.value = true;
@@ -316,7 +439,7 @@
         }
       };
 
-      const validateToken = async () => {
+      const validateToken = async (): Promise<boolean> => {
         if (!selectedDomain.value || !adminToken.value) {
           alert('Please enter both server URL and admin token');
           return false;
@@ -332,7 +455,7 @@
             : `Bearer ${adminToken.value}`;
 
           // Use the local validation function
-          const result = await validateDirectusToken(selectedDomain.value, token);
+          const result: ValidationResult = await validateDirectusToken(selectedDomain.value, token);
 
           if (result.success) {
             operationStatus.value = {
@@ -363,7 +486,7 @@
         }
       };
 
-      const importFromLive = async (collectionName: string) => {
+      const importFromLive = async (collectionName: string): Promise<void> => {
         if (!selectedDomain.value || !adminToken.value) {
           console.error('API URL and admin token are required for external API access');
           operationStatus.value = {
@@ -384,13 +507,13 @@
             : `Bearer ${adminToken.value}`;
 
           // Use the local import function
-          const result = await importFromDirectus(selectedDomain.value, token, collectionName);
+          const result: ImportResult = await importFromDirectus(selectedDomain.value, token, collectionName, api);
 
           if (result.success) {
             // Calculate success/failure statistics
             const importedItems = result.importedItems || [];
-            const successful = importedItems.filter((item: any) => item.status !== 'error').length;
-            const failed = importedItems.filter((item: any) => item.status === 'error').length;
+            const successful = importedItems.filter((item: ImportedItem) => item.status !== 'error').length;
+            const failed = importedItems.filter((item: ImportedItem) => item.status === 'error').length;
 
             // If the collection is empty, show a different message
             if (result.message?.includes('empty')) {
@@ -409,7 +532,7 @@
 
             // If there were any failures, show them in the console
             if (failed > 0) {
-              const failedItems = importedItems.filter((item: any) => item.status === 'error');
+              const failedItems = importedItems.filter((item: ImportedItem) => item.status === 'error');
               console.warn('Some items failed to import:', failedItems);
             }
 
@@ -478,7 +601,7 @@
         }
       };
 
-      const importFromApi = async (collectionName: string) => {
+      const importFromApi = async (collectionName: string): Promise<void> => {
         if (!selectedDomain.value || !adminToken.value) {
           console.error('API URL and admin token are required for external API access');
           operationStatus.value = {
@@ -504,13 +627,13 @@
           });
 
           // Use the local API import function
-          const result = await importFromExternalApi(selectedDomain.value, token, collectionName);
+          const result: ImportResult = await importFromExternalApi(selectedDomain.value, token, collectionName, api);
 
           if (result.success) {
             // Calculate success/failure statistics
             const importedItems = result.importedItems || [];
-            const successful = importedItems.filter((item: any) => item.status !== 'error').length;
-            const failed = importedItems.filter((item: any) => item.status === 'error').length;
+            const successful = importedItems.filter((item: ImportedItem) => item.status !== 'error').length;
+            const failed = importedItems.filter((item: ImportedItem) => item.status === 'error').length;
 
             // If the collection is empty, show a different message
             if (result.message?.includes('empty')) {
@@ -529,7 +652,7 @@
 
             // If there were any failures, show them in the console
             if (failed > 0) {
-              const failedItems = importedItems.filter((item: any) => item.status === 'error');
+              const failedItems = importedItems.filter((item: ImportedItem) => item.status === 'error');
               console.warn('Some items failed to import:', failedItems);
             }
 

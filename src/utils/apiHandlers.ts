@@ -1,12 +1,131 @@
-import axios from 'axios';
-import type { ApiError, ImportLogEntry } from '../types';
+import type { ImportLogEntry } from '../types';
+import {
+  createDirectus,
+  createFolder,
+  createItems,
+  deleteFiles,
+  deleteItems,
+  readFiles,
+  readFolders,
+  readItems,
+  rest,
+  staticToken,
+  updateItem,
+  uploadFiles,
+  updateFile,
+  readCollection,
+  readFields,
+} from '@directus/sdk';
+
+// Simplified browser-compatible version without axios and crypto dependencies
+
+// Add interfaces for the import functionality
+interface TitleObject {
+  name: string;
+  type: string;
+  label: string;
+  required: number;
+  minlength: number;
+  maxlength: number;
+  size: number;
+  tags: string;
+  id: number;
+  field_languageId: number;
+  value: string;
+}
+
+interface BodyObject {
+  name: string;
+  type: string;
+  label: string;
+  minlength: number;
+  maxlength: number;
+  tags: string;
+  id: number;
+  field_languageId: number;
+  value: string;
+}
+
+interface Translation {
+  languages_code: string
+  title: string | { value: string }
+  body: string | { value: string } | null
+  [key: string]: any // Allow additional fields
+}
+
+interface BaseItem {
+  id: number | string;
+  title: string;
+  status: number | string;
+  date?: string;
+  date_created?: string;
+  counter?: number;
+  url?: string;
+  path?: string;
+  sort?: number;
+  client?: any;
+  site?: any;
+  services?: any;
+  body?: any;
+  image?: string | null;
+  audio?: string | null;
+  video?: string | string[] | null;
+  videoFiles?: (string | { id: string })[];
+  media?: Array<{
+    url: string;
+    filename: string;
+    type: string;
+    type_short: string;
+    id: number;
+    description: string;
+    field_name: string;
+  }>;
+  translations?: Translation[];
+}
+
+interface ExistingItem extends BaseItem {
+  id: number | string;
+  status: string;
+}
+
+interface ApiError extends Error {
+  response?: {
+    data: unknown;
+    status: number;
+    statusText: string;
+    headers: Record<string, string>;
+  };
+  retries: number;
+  details?: unknown;
+}
+
+interface ImportedItem {
+  id: number | string
+  title: string
+  status: 'created' | 'updated' | 'error'
+  fields?: Record<string, any>
+  files?: {
+    image: string | null
+    audio: string | null
+    video: string | string[] | null
+    media: string[] | null
+  }
+  translations?: Translation[]
+  error?: string
+  log: Array<{
+    timestamp: string
+    step: string
+    details: any
+  }>
+}
 
 /**
  * Validates a Directus admin token against a target server
  */
 export async function validateDirectusToken(
   selectedDomain: string,
-  adminToken: string
+  adminToken: string,
+  api?: any
 ): Promise<{
   success: boolean;
   message: string;
@@ -47,93 +166,49 @@ export async function validateDirectusToken(
       };
     }
 
-    // Test connection to target server first
-    logStep('connection_test_start', { domain: selectedDomain });
+    // Use the provided API instance or create a new one
+    const directusApi = api || createDirectus(selectedDomain).with(staticToken(adminToken)).with(rest());
+
+    // Test connection by trying to read collections
+    logStep('token_validation_start', {});
     try {
-      // Test the connection by making a simple ping request
-      const response = await axios.get(`${selectedDomain}/server/ping`, {
-        headers: {
-          Authorization: adminToken,
-        },
-        timeout: 5000,
+      const collectionsResponse = await directusApi.request(readCollection('directus_collections')) as any[];
+      
+      logStep('token_validation_success', {
+        hasAccess: true,
+        collectionCount: collectionsResponse?.length || 0
       });
 
-      if (response.status !== 200) {
-        throw new Error(`Server returned status ${response.status}`);
-      }
+      // Get server info
+      const serverInfoResponse = await directusApi.request(readCollection('directus_system_info')) as any;
 
-      logStep('connection_test_success', {
-        status: response.status,
-        responseTime: response.headers['x-response-time'] || 'unknown'
-      });
+      return {
+        success: true,
+        message: 'Token validation successful',
+        serverInfo: {
+          version: serverInfoResponse?.version || 'Unknown',
+          project: serverInfoResponse?.project || 'Unknown'
+        }
+      };
 
-      // Test admin token by trying to read collections
-      logStep('token_validation_start', {});
-      try {
-        const collectionsResponse = await axios.get(`${selectedDomain}/collections`, {
-          headers: {
-            Authorization: adminToken,
-          },
-          timeout: 10000,
-        });
-
-        logStep('token_validation_success', {
-          hasAccess: true,
-          collectionCount: collectionsResponse.data?.data?.length || 0
-        });
-
-        // Get server info
-        const serverInfoResponse = await axios.get(`${selectedDomain}/server/info`, {
-          headers: {
-            Authorization: adminToken,
-          },
-          timeout: 5000,
-        });
-
-        return {
-          success: true,
-          message: 'Token validation successful',
-          serverInfo: {
-            version: serverInfoResponse.data?.data?.version || 'Unknown',
-            project: serverInfoResponse.data?.data?.project || 'Unknown'
-          }
-        };
-
-      } catch (tokenError: any) {
-        logStep('token_validation_failed', {
-          error: tokenError.message,
-          status: tokenError.response?.status,
-          details: tokenError.response?.data
-        });
-        return {
-          success: false,
-          message: 'Invalid admin token or insufficient permissions',
-          error: {
-            message: tokenError.message,
-            status: tokenError.response?.status,
-            details: tokenError.response?.data,
-            validationLog
-          }
-        };
-      }
-
-    } catch (error: any) {
-      logStep('connection_test_failed', {
-        error: error.message,
-        status: error.response?.status,
-        details: error.response?.data
+    } catch (tokenError: any) {
+      logStep('token_validation_failed', {
+        error: tokenError.message,
+        status: tokenError.response?.status,
+        details: tokenError.response?.data
       });
       return {
         success: false,
-        message: `Failed to connect to server: ${error.message}`,
+        message: 'Invalid admin token or insufficient permissions',
         error: {
-          message: error.message,
-          status: error.response?.status,
-          details: error.response?.data,
+          message: tokenError.message,
+          status: tokenError.response?.status,
+          details: tokenError.response?.data,
           validationLog
         }
       };
     }
+
   } catch (error: any) {
     logStep('fatal_error', {
       message: error.message,
@@ -158,7 +233,8 @@ export async function validateDirectusToken(
 export async function importFromDirectus(
   sourceUrl: string,
   sourceToken: string,
-  collectionName: string
+  collectionName: string,
+  apiInstance?: any
 ): Promise<{
   success: boolean;
   message: string;
@@ -186,7 +262,7 @@ export async function importFromDirectus(
     });
 
     // Validate token first
-    const tokenValidation = await validateDirectusToken(sourceUrl, sourceToken);
+    const tokenValidation = await validateDirectusToken(sourceUrl, sourceToken, apiInstance);
     if (!tokenValidation.success) {
       logStep('token_validation_failed', tokenValidation.error);
       return {
@@ -199,25 +275,21 @@ export async function importFromDirectus(
 
     logStep('token_validation_success', { serverInfo: tokenValidation.serverInfo });
 
+    // Create source Directus instance
+    const sourceDirectus = createDirectus(sourceUrl).with(staticToken(sourceToken)).with(rest());
+
     // Fetch data from source server
     logStep('fetch_data_start', { collectionName });
-    const sourceResponse = await axios.get(`${sourceUrl}/items/${collectionName}`, {
-      headers: {
-        Authorization: sourceToken,
-      },
-      params: {
-        limit: -1, // Get all items
-      },
-      timeout: 30000,
-    });
+    const sourceItems = await sourceDirectus.request(
+      (readItems as any)(collectionName, { limit: -1 })
+    ) as any[];
 
-    const sourceItems = sourceResponse.data?.data || [];
     logStep('fetch_data_success', {
-      itemCount: sourceItems.length,
+      itemCount: sourceItems?.length || 0,
       collectionName
     });
 
-    if (sourceItems.length === 0) {
+    if (!sourceItems || sourceItems.length === 0) {
       logStep('collection_empty', { collectionName });
       return {
         success: true,
@@ -242,12 +314,8 @@ export async function importFromDirectus(
         // Remove system fields that shouldn't be imported
         const { id, date_created, date_updated, user_created, user_updated, ...cleanItem } = item;
         
-        // Import the item
-        const importResponse = await axios.post(`/items/${collectionName}`, cleanItem, {
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        });
+        // Import the item using the API instance
+        const importResponse = await apiInstance.post(`/items/${collectionName}`, cleanItem);
 
         importedItems.push({
           originalId: id,
@@ -321,7 +389,8 @@ export async function importFromDirectus(
 export async function importFromExternalApi(
   selectedDomain: string,
   adminToken: string,
-  collectionName: string
+  collectionName: string,
+  apiInstance?: any
 ): Promise<{
   success: boolean;
   message: string;
@@ -349,7 +418,7 @@ export async function importFromExternalApi(
     });
 
     // Validate token first
-    const tokenValidation = await validateDirectusToken(selectedDomain, adminToken);
+    const tokenValidation = await validateDirectusToken(selectedDomain, adminToken, apiInstance);
     if (!tokenValidation.success) {
       logStep('token_validation_failed', tokenValidation.error);
       return {
@@ -362,25 +431,21 @@ export async function importFromExternalApi(
 
     logStep('token_validation_success', { serverInfo: tokenValidation.serverInfo });
 
+    // Create source Directus instance
+    const sourceDirectus = createDirectus(selectedDomain).with(staticToken(adminToken)).with(rest());
+
     // Fetch data from external API
     logStep('fetch_api_data_start', { collectionName });
-    const apiResponse = await axios.get(`${selectedDomain}/items/${collectionName}`, {
-      headers: {
-        Authorization: adminToken,
-      },
-      params: {
-        limit: -1, // Get all items
-      },
-      timeout: 30000,
-    });
+    const apiItems = await sourceDirectus.request(
+      (readItems as any)(collectionName, { limit: -1 })
+    ) as any[];
 
-    const apiItems = apiResponse.data?.data || [];
     logStep('fetch_api_data_success', {
-      itemCount: apiItems.length,
+      itemCount: apiItems?.length || 0,
       collectionName
     });
 
-    if (apiItems.length === 0) {
+    if (!apiItems || apiItems.length === 0) {
       logStep('api_collection_empty', { collectionName });
       return {
         success: true,
@@ -405,12 +470,8 @@ export async function importFromExternalApi(
         // Remove system fields that shouldn't be imported
         const { id, date_created, date_updated, user_created, user_updated, ...cleanItem } = item;
         
-        // Import the item
-        const importResponse = await axios.post(`/items/${collectionName}`, cleanItem, {
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        });
+        // Import the item using the API instance
+        const importResponse = await apiInstance.post(`/items/${collectionName}`, cleanItem);
 
         importedItems.push({
           originalId: id,
@@ -474,6 +535,175 @@ export async function importFromExternalApi(
         details: error.response?.data
       },
       importLog
+    };
+  }
+}
+
+/**
+ * Simplified import collection handler for browser compatibility
+ */
+export async function importCollectionHandler(
+  directus: any,
+  collection: string,
+  selectedDomain: string,
+  req?: any
+): Promise<{
+  success: boolean;
+  message: string;
+  summary?: any;
+  importedData?: any;
+  processedItems?: ImportedItem[];
+  importLog?: any[];
+  error?: any;
+}> {
+  const importLog: any[] = []
+  const logStep = (step: string, details: any) => {
+    const logEntry = {
+      timestamp: new Date().toISOString(),
+      step,
+      details,
+    }
+    importLog.push(logEntry)
+    console.log(`[${step}]`, details)
+  }
+
+  try {
+    logStep('request_received', {
+      selectedDomain,
+      collection
+    })
+
+    if (!selectedDomain) {
+      return {
+        success: false,
+        message: 'Missing required parameter: selectedDomain',
+        error: { importLog }
+      }
+    }
+
+    // Create source Directus instance
+    const sourceDirectus = createDirectus(selectedDomain).with(rest());
+
+    // Fetch data from API
+    logStep('api_request_start', { url: selectedDomain })
+    const items = await sourceDirectus.request(
+      (readItems as any)(collection, { limit: -1 })
+    ) as any[]
+
+    logStep('api_request_complete', {
+      itemCount: items?.length || 0,
+      collection
+    })
+
+    if (!items || items.length === 0) {
+      return {
+        success: true,
+        message: `Collection '${collection}' is empty`,
+        summary: { totalItems: 0 },
+        importedData: { items: [] },
+        processedItems: [],
+        importLog
+      }
+    }
+
+    // Get existing items
+    const existingItems = await directus.request(
+      (readItems as any)(collection, {
+        filter: {
+          id: {
+            _in: items
+              .map((item: any) => (typeof item.id === 'number' && !isNaN(item.id) ? item.id : null))
+              .filter((id: any): id is number => id !== null),
+          },
+        },
+      })
+    )
+
+    const importedItems: ImportedItem[] = []
+
+    // Process each item
+    for (const item of items) {
+      try {
+        const existingItem = existingItems.find((e: any) => e.id === item.id);
+
+        if (existingItem) {
+          // Update existing item
+          const { id, date_created, date_updated, user_created, user_updated, ...cleanItem } = item;
+          await directus.request(
+            (updateItem as any)(collection, existingItem.id, cleanItem)
+          );
+
+          importedItems.push({
+            id: item.id,
+            title: item.title || 'Unknown',
+            status: 'updated',
+            log: []
+          });
+        } else {
+          // Create new item
+          const { id, date_created, date_updated, user_created, user_updated, ...cleanItem } = item;
+          const result = await directus.request(
+            (createItems as any)(collection, [cleanItem])
+          );
+
+          importedItems.push({
+            id: item.id,
+            title: item.title || 'Unknown',
+            status: 'created',
+            log: []
+          });
+        }
+      } catch (error: any) {
+        importedItems.push({
+          id: item.id,
+          title: item.title || 'Unknown',
+          status: 'error',
+          error: error.message,
+          log: []
+        });
+      }
+    }
+
+    const successfulItems = importedItems.filter(item => item.status === 'created' || item.status === 'updated');
+    const failedItems = importedItems.filter(item => item.status === 'error');
+
+    return {
+      success: true,
+      message: `Imported ${importedItems.length} items from ${collection}`,
+      summary: {
+        totalItems: items.length,
+        successful: successfulItems.length,
+        failed: failedItems.length,
+        created: importedItems.filter(item => item.status === 'created').length,
+        updated: importedItems.filter(item => item.status === 'updated').length,
+        collection,
+        sourceUrl: selectedDomain
+      },
+      importedData: {
+        items: importedItems.map(item => ({
+          id: item.id,
+          title: item.title,
+          status: item.status,
+          error: item.error
+        }))
+      },
+      processedItems: importedItems,
+      importLog,
+    };
+
+  } catch (error: any) {
+    logStep('fatal_error', {
+      message: error.message,
+      stack: error.stack,
+    });
+    return {
+      success: false,
+      message: `Error importing collections: ${error.message}`,
+      error: {
+        message: error.message,
+        details: error.response?.data || 'No additional details available',
+      },
+      importLog,
     };
   }
 }
