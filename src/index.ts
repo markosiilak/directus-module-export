@@ -14,9 +14,3 @@ export default defineModule({
   ],
 })
 
-export const domainOptions = [
-  { text: 'Select a domain', value: 'none' },
-  { text: 'admin.siilak.com', value: 'https://admin.siilak.com' },
-  { text: 'www.siilak.com', value: 'https://www.siilak.com' },
-  { text: 'localhost:9055', value: 'http://localhost:9055' },
-]
