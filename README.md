@@ -51,12 +51,7 @@ The module provides a user-friendly interface for:
 ### Configuration
 
 #### Domain Settings
-
-The module includes predefined domain options:
-- `admin.siilak.com` (https://admin.siilak.com)
-- `www.siilak.com` (https://www.siilak.com)
-- `localhost:9055` (http://localhost:9055)
-
+- Enter domains using the provided input field. Recent domains are automatically saved to your browser's local storage for quick access.
 You can also add custom domains through the interface.
 
 #### Authentication
