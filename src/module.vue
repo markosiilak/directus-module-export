@@ -104,28 +104,12 @@
 <script lang="ts">
   import { useApi } from '@directus/extensions-sdk';
   import { defineComponent, onMounted, ref, watch } from 'vue';
+  import { validateDirectusToken, importFromDirectus, importFromExternalApi } from './utils/apiHandlers';
+  import type { ApiError, ImportLogEntry } from './types';
 
   const syncPushSuccess = ref(false);
 
-  interface ApiError {
-    message?: string
-    response?: {
-      data?: {
-        message?: string
-        error?: string
-        details?: unknown
-        success?: boolean
-        data?: unknown
-      }
-      status?: number
-    }
-  }
 
-  interface ImportLogEntry {
-    timestamp: string;
-    step: string;
-    details: Record<string, unknown>;
-  }
 
   export default defineComponent({
     name: 'ImportPushCollections',
@@ -343,47 +327,38 @@
         try {
           setLoading('token_validation', '', true);
           operationStatus.value = null;
+          
           // Ensure token is properly formatted
           const token = adminToken.value.startsWith('Bearer ')
             ? adminToken.value
             : `Bearer ${adminToken.value}`;
 
-          // Use the server-side validation endpoint
-          const response = await api.post('/api/directus/validate/token', {
-            selectedDomain: selectedDomain.value,
-            adminToken: token,
-          });
+          // Use the local validation function
+          const result = await validateDirectusToken(selectedDomain.value, token);
 
-          if (response.data.success) {
+          if (result.success) {
             operationStatus.value = {
-              status: response.status,
-              message: `Token validated successfully! Server Info: Version: ${response.data.serverInfo.version}, Project: ${response.data.serverInfo.project}`,
+              status: 200,
+              message: `Token validated successfully! Server Info: Version: ${result.serverInfo?.version || 'Unknown'}, Project: ${result.serverInfo?.project || 'Unknown'}`,
               type: 'success'
             };
             return true;
           } else {
-            throw new Error(response.data.message || 'Token validation failed');
+            operationStatus.value = {
+              status: 400,
+              message: result.message || 'Token validation failed',
+              type: 'error'
+            };
+            return false;
           }
         } catch (error: any) {
-          console.error('Token validation error:', {
-            message: error.message,
-            status: error.response?.status,
-            statusText: error.response?.statusText,
-            details: error.response?.data,
-          });
+          console.error('Token validation error:', error);
 
           operationStatus.value = {
-            status: error.response?.status,
-            message: error.response?.data?.message || error.message || 'Token validation failed',
+            status: 500,
+            message: error.message || 'Token validation failed',
             type: 'error'
           };
-
-          // Provide specific error messages based on the response
-          if (error.response?.status === 401) {
-            operationStatus.value.message = 'Authentication Error: The token is not valid for the target server. Please ensure you are using the correct token and server URL.';
-          } else if (error.response?.status === 403) {
-            operationStatus.value.message = 'Permission Error: The token does not have sufficient permissions. Please ensure you are using an admin token with read/write access.';
-          }
           return false;
         } finally {
           setLoading('token_validation', '', false);
@@ -410,28 +385,25 @@
             ? adminToken.value
             : `Bearer ${adminToken.value}`;
 
-          // Use the new import-from-directus endpoint
-          const response = await api.post('/api/directus/import-from-directus/' + collectionName, {
-            sourceUrl: selectedDomain.value,
-            sourceToken: token,
-          });
+          // Use the local import function
+          const result = await importFromDirectus(selectedDomain.value, token, collectionName);
 
-          if (response.data.success) {
+          if (result.success) {
             // Calculate success/failure statistics
-            const importedItems = response.data.importedItems || [];
+            const importedItems = result.importedItems || [];
             const successful = importedItems.filter((item: any) => item.status !== 'error').length;
             const failed = importedItems.filter((item: any) => item.status === 'error').length;
 
             // If the collection is empty, show a different message
-            if (response.data.message?.includes('empty')) {
+            if (result.message?.includes('empty')) {
               operationStatus.value = {
-                status: response.status,
-                message: response.data.message,
+                status: 200,
+                message: result.message,
                 type: 'info'
               };
             } else {
               operationStatus.value = {
-                status: response.status,
+                status: 200,
                 message: `Successfully imported ${successful} items from ${collectionName} (${failed} failed)`,
                 type: failed > 0 ? 'warning' : 'success'
               };
@@ -443,39 +415,31 @@
               console.warn('Some items failed to import:', failedItems);
             }
 
-            console.log('Import response:', response.data);
+            console.log('Import result:', result);
             return;
           }
 
-          if (!response.data.success) {
-            const errorMessage = response.data.message || `Failed to import ${collectionName}`;
-            const errorDetails = response.data.details || 'No additional details available';
-            const importLog = response.data.importLog || [];
+          // Handle failure
+          const errorMessage = result.message || `Failed to import ${collectionName}`;
+          const errorDetails = result.error?.details || 'No additional details available';
+          const importLog = result.importLog || [];
 
-            // Log the full error details for debugging
-            console.error('Import failed:', {
-              message: errorMessage,
-              details: errorDetails,
-              importLog
-            });
+          // Log the full error details for debugging
+          console.error('Import failed:', {
+            message: errorMessage,
+            details: errorDetails,
+            importLog
+          });
 
-            // Find the last error in the import log if available
-            const lastError = importLog.find((log: ImportLogEntry) => log.step === 'fatal_error' || log.step === 'error');
-            const detailedMessage = lastError
-              ? `${errorMessage} - ${JSON.stringify(lastError.details)}`
-              : errorMessage;
-
-            throw new Error(detailedMessage);
-          }
-        } catch (error: unknown) {
-          console.error('Error importing from live server:', error);
-          const apiError = error as ApiError;
-          const errorMessage = apiError.response?.data?.message || apiError.message || 'Unknown error occurred';
-          const errorDetails = apiError.response?.data?.details || 'No additional details available';
+          // Find the last error in the import log if available
+          const lastError = importLog.find((log: ImportLogEntry) => log.step === 'fatal_error' || log.step === 'error');
+          const detailedMessage = lastError
+            ? `${errorMessage} - ${JSON.stringify(lastError.details)}`
+            : errorMessage;
 
           operationStatus.value = {
-            status: apiError.response?.status || 500,
-            message: `${errorMessage}${errorDetails ? ` - ${errorDetails}` : ''}`,
+            status: 500,
+            message: detailedMessage,
             type: 'error'
           };
 
@@ -484,6 +448,27 @@
             `Import failed for ${collectionName}:\n\n` +
               `Error: ${errorMessage}\n` +
               `Details: ${errorDetails}\n\n` +
+              'Please check:\n' +
+              '1. The server URL is correct\n' +
+              '2. The collection exists on the source server\n' +
+              '3. The admin token has proper permissions\n' +
+              '4. The source server is accessible'
+          );
+        } catch (error: unknown) {
+          console.error('Error importing from live server:', error);
+          const apiError = error as ApiError;
+          const errorMessage = apiError.message || 'Unknown error occurred';
+
+          operationStatus.value = {
+            status: 500,
+            message: errorMessage,
+            type: 'error'
+          };
+
+          // Show a more detailed error alert
+          alert(
+            `Import failed for ${collectionName}:\n\n` +
+              `Error: ${errorMessage}\n\n` +
               'Please check:\n' +
               '1. The server URL is correct\n' +
               '2. The collection exists on the source server\n' +
@@ -508,78 +493,73 @@
 
         setLoading('import_api', collectionName, true);
         operationStatus.value = null;
+        
         try {
           // Ensure token is properly formatted
           const token = adminToken.value.startsWith('Bearer ')
             ? adminToken.value
             : `Bearer ${adminToken.value}`;
 
-          // Use different endpoint for invoice collection
-          const endpoint = collectionName === 'invoice'
-            ? '/api/directus/import/invoice'
-            : '/api/directus/import/' + collectionName;
-
           console.log('Importing from API:', {
             selectedDomain: selectedDomain.value,
-            collection: collectionName,
-            endpoint
+            collection: collectionName
           });
 
-          // Prepare request body based on collection type
-          const requestBody = collectionName === 'invoice'
-            ? { url: selectedDomain.value }
-            : {
-              selectedDomain: selectedDomain.value,
-              collection: collectionName,
-              adminToken: token,
-            };
+          // Use the local API import function
+          const result = await importFromExternalApi(selectedDomain.value, token, collectionName);
 
-          const response = await api.post(
-            endpoint,
-            requestBody,
-            {
-              headers: {
-                'Content-Type': 'application/json',
-              },
+          if (result.success) {
+            // Calculate success/failure statistics
+            const importedItems = result.importedItems || [];
+            const successful = importedItems.filter((item: any) => item.status !== 'error').length;
+            const failed = importedItems.filter((item: any) => item.status === 'error').length;
+
+            // If the collection is empty, show a different message
+            if (result.message?.includes('empty')) {
+              operationStatus.value = {
+                status: 200,
+                message: result.message,
+                type: 'info'
+              };
+            } else {
+              operationStatus.value = {
+                status: 200,
+                message: `Successfully imported ${successful} items from API for ${collectionName} (${failed} failed)`,
+                type: failed > 0 ? 'warning' : 'success'
+              };
             }
-          );
 
-          if (!response.data.success) {
-            const errorMessage = response.data.message || `Failed to import ${collectionName}`;
-            const errorDetails = response.data.details || 'No additional details available';
-            const importLog = response.data.importLog || [];
+            // If there were any failures, show them in the console
+            if (failed > 0) {
+              const failedItems = importedItems.filter((item: any) => item.status === 'error');
+              console.warn('Some items failed to import:', failedItems);
+            }
 
-            // Log the full error details for debugging
-            console.error('Import failed:', {
-              message: errorMessage,
-              details: errorDetails,
-              importLog
-            });
-
-            // Find the last error in the import log if available
-            const lastError = importLog.find((log: ImportLogEntry) => log.step === 'fatal_error' || log.step === 'error');
-            const detailedMessage = lastError
-              ? `${errorMessage} - ${JSON.stringify(lastError.details)}`
-              : errorMessage;
-
-            throw new Error(detailedMessage);
+            console.log('Import result:', result);
+            return;
           }
 
-          operationStatus.value = {
-            status: response.status,
-            message: `Successfully imported ${collectionName} from API`,
-            type: 'success'
-          };
-          console.log('Import response:', response.data);
-        } catch (error: unknown) {
-          console.error('Error importing from API:', error);
-          const apiError = error as ApiError;
-          const errorMessage = apiError.response?.data?.message || apiError.message || 'Unknown error occurred';
-          const errorDetails = apiError.response?.data?.details || 'No additional details available';
+          // Handle failure
+          const errorMessage = result.message || `Failed to import ${collectionName}`;
+          const errorDetails = result.error?.details || 'No additional details available';
+          const importLog = result.importLog || [];
+
+          // Log the full error details for debugging
+          console.error('Import failed:', {
+            message: errorMessage,
+            details: errorDetails,
+            importLog
+          });
+
+          // Find the last error in the import log if available
+          const lastError = importLog.find((log: ImportLogEntry) => log.step === 'fatal_error' || log.step === 'error');
+          const detailedMessage = lastError
+            ? `${errorMessage} - ${JSON.stringify(lastError.details)}`
+            : errorMessage;
 
           operationStatus.value = {
-            status: apiError.response?.status || 500,
-            message: `${errorMessage}${errorDetails ? ` - ${errorDetails}` : ''}`,
+            status: 500,
+            message: detailedMessage,
             type: 'error'
           };
 
@@ -588,6 +568,27 @@
             `Import failed for ${collectionName}:\n\n` +
               `Error: ${errorMessage}\n` +
               `Details: ${errorDetails}\n\n` +
+              'Please check:\n' +
+              '1. The server URL is correct\n' +
+              '2. The collection exists on the source server\n' +
+              '3. The admin token has proper permissions\n' +
+              '4. The source server is accessible'
+          );
+        } catch (error: unknown) {
+          console.error('Error importing from API:', error);
+          const apiError = error as ApiError;
+          const errorMessage = apiError.message || 'Unknown error occurred';
+
+          operationStatus.value = {
+            status: 500,
+            message: errorMessage,
+            type: 'error'
+          };
+
+          // Show a more detailed error alert
+          alert(
+            `Import failed for ${collectionName}:\n\n` +
+              `Error: ${errorMessage}\n\n` +
               'Please check:\n' +
               '1. The server URL is correct\n' +
               '2. The collection exists on the source server\n' +
