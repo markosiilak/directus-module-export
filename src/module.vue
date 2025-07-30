@@ -109,11 +109,9 @@
 
   const syncPushSuccess = ref(false);
 
-
-
   export default defineComponent({
     name: 'ImportPushCollections',
-    setup() {
+    setup(): any {
       const api = useApi();
       const collections = ref<any[]>([]);
       const loadingStates = ref<Record<string, boolean>>({
