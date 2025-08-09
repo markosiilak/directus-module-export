@@ -1,5 +1,13 @@
 # Directus Module Export
 
+<p align="left">
+  <a href="https://github.com/markosiilak/directus-module-export"><img alt="GitHub Repo" src="https://img.shields.io/badge/GitHub-markosiilak%2Fdirectus--module--export-181717?logo=github" /></a>
+  <a href="https://github.com/markosiilak/directus-module-export/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/License-MIT-green.svg" /></a>
+  <a href="#"><img alt="Directus" src="https://img.shields.io/badge/Directus-11%2B-263238?logo=directus&logoColor=white" /></a>
+  <a href="#"><img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white" /></a>
+  <a href="https://www.npmjs.com/package/directus-module-export"><img alt="npm" src="https://img.shields.io/npm/v/directus-module-export?color=CB3837&logo=npm" /></a>
+</p>
+
 A Directus module extension for importing collection data from another Directus instance. Simplified for latest Directus versions.
 
 ## Features
@@ -10,6 +18,14 @@ A Directus module extension for importing collection data from another Directus 
 - **History management**: Save and reuse domain and token inputs (localStorage)
 - **Real-time status**: Inline progress and concise error messages
 - **Per-collection import**: Import items for a specific collection
+
+### At a glance
+
+<p align="left">
+  <img alt="Import" title="Import" src="https://img.shields.io/badge/Import-From%20Directus-5E81F4?style=for-the-badge&logo=download" />
+  <img alt="Validate" title="Validate Token" src="https://img.shields.io/badge/Validate-Token-27AE60?style=for-the-badge&logo=vercel" />
+  <img alt="Check" title="Preflight Check" src="https://img.shields.io/badge/Preflight-Check-F39C12?style=for-the-badge&logo=checkmarx" />
+</p>
 
 ## Installation
 
