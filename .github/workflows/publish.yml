@@ -51,10 +51,29 @@ jobs:
         if: steps.versions.outputs.local != steps.versions.outputs.published
         run: npm run build
 
+      - name: Verify NPM_TOKEN is set
+        if: steps.versions.outputs.local != steps.versions.outputs.published
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "ERROR: NPM_TOKEN secret is not configured in the repository settings."
+            exit 1
+          fi
+
+      - name: Configure npm auth
+        if: steps.versions.outputs.local != steps.versions.outputs.published
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+          npm whoami || true
+
       - name: Publish to npm
         if: steps.versions.outputs.local != steps.versions.outputs.published
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public
 
 
