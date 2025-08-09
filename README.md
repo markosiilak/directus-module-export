@@ -112,6 +112,22 @@ npm run dev
 
 No environment variables are required. Install and enable the module in your Directus instance per normal extension flow.
 
+## CI / CD (Auto-publish to npm)
+
+This package can publish automatically to npm when changes are pushed.
+
+- Workflow location: `extensions/module-export/.github/workflows/publish.yml`
+- Triggers: Push to `master`/`main` affecting `extensions/module-export/**` or manual dispatch
+- Requirements:
+  - Repository secret `NPM_TOKEN` with publish access
+  - Version bump in `extensions/module-export/package.json` (workflow skips if version unchanged)
+
+Manual publish (optional):
+```bash
+npm version patch   # or minor/major
+npm publish --access public
+```
+
 ## Troubleshooting
 
 ### Common issues
