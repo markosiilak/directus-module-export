@@ -1,21 +1,8 @@
-import type { ImportLogEntry } from '../types';
-import {
-  createDirectus,
-  createFolder,
-  createItems,
-  deleteFiles,
-  deleteItems,
-  readFiles,
-  readFolders,
-  readItems,
-  rest,
-  staticToken,
-  updateItem,
-  uploadFiles,
-  updateFile,
-  readCollection,
-  readFields,
-} from '@directus/sdk';
+// Import extensions SDK for extension-specific functionality
+import { useApi, useCollection, useItems } from "@directus/extensions-sdk";
+import { createDirectus, readItems, rest, staticToken, authentication } from "@directus/sdk";
+
+import type { ImportLogEntry } from "../types";
 
 // Simplified browser-compatible version without axios and crypto dependencies
 
@@ -47,10 +34,10 @@ interface BodyObject {
 }
 
 interface Translation {
-  languages_code: string
-  title: string | { value: string }
-  body: string | { value: string } | null
-  [key: string]: any // Allow additional fields
+  languages_code: string;
+  title: string | { value: string };
+  body: string | { value: string } | null;
+  [key: string]: any; // Allow additional fields
 }
 
 interface BaseItem {
@@ -100,23 +87,224 @@ interface ApiError extends Error {
 }
 
 interface ImportedItem {
-  id: number | string
-  title: string
-  status: 'created' | 'updated' | 'error'
-  fields?: Record<string, any>
+  id: number | string;
+  title: string;
+  status: "created" | "updated" | "error";
+  fields?: Record<string, any>;
   files?: {
-    image: string | null
-    audio: string | null
-    video: string | string[] | null
-    media: string[] | null
-  }
-  translations?: Translation[]
-  error?: string
+    image: string | null;
+    audio: string | null;
+    video: string | string[] | null;
+    media: string[] | null;
+  };
+  translations?: Translation[];
+  error?: string;
   log: Array<{
-    timestamp: string
-    step: string
-    details: any
-  }>
+    timestamp: string;
+    step: string;
+    details: any;
+  }>;
+}
+
+/**
+ * Generates an admin token using username and password
+ */
+export async function generateAdminToken(
+  selectedDomain: string,
+  username: string,
+  password: string,
+): Promise<{
+  success: boolean;
+  message: string;
+  token?: string;
+  error?: any;
+}> {
+  try {
+    console.log('Generating admin token for:', { domain: selectedDomain, username });
+
+    const sourceDirectus = createDirectus(selectedDomain)
+      .with(authentication())
+      .with(rest());
+
+    // Authenticate and get token
+    const authResult = await sourceDirectus.login({
+      email: username,
+      password: password,
+    });
+    
+    if (authResult.access_token) {
+      console.log('Admin token generated successfully');
+      return {
+        success: true,
+        message: 'Admin token generated successfully',
+        token: authResult.access_token,
+      };
+    } else {
+      return {
+        success: false,
+        message: 'No access token received from authentication',
+        error: { authResult },
+      };
+    }
+  } catch (error: any) {
+    console.error('Admin token generation failed:', {
+      error: error.message,
+      status: error.response?.status,
+      details: error.response?.data,
+    });
+    
+    return {
+      success: false,
+      message: `Failed to generate admin token: ${error.message}`,
+      error: {
+        message: error.message,
+        status: error.response?.status,
+        details: error.response?.data,
+      },
+    };
+  }
+}
+
+/**
+ * Tests API access to multiple collections to diagnose permission issues
+ */
+export async function testMultipleCollections(
+  selectedDomain: string,
+  adminToken: string,
+): Promise<{
+  success: boolean;
+  results: Record<string, { success: boolean; message: string; error?: any }>;
+}> {
+  const testCollections = ['news', 'client', 'invoice', 'page'];
+  const results: Record<string, { success: boolean; message: string; error?: any }> = {};
+  
+  for (const collection of testCollections) {
+    console.log(`Testing collection: ${collection}`);
+    const result = await testCollectionAccess(selectedDomain, adminToken, collection);
+    results[collection] = result;
+    
+    // Add a small delay between tests
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  
+  const successCount = Object.values(results).filter(r => r.success).length;
+  
+  return {
+    success: successCount > 0,
+    results
+  };
+}
+
+/**
+ * Tests API access to a specific collection
+ */
+export async function testCollectionAccess(
+  selectedDomain: string,
+  adminToken: string,
+  collectionName: string,
+): Promise<{
+  success: boolean;
+  message: string;
+  error?: any;
+}> {
+  try {
+    console.log('Testing collection access:', {
+      domain: selectedDomain,
+      collection: collectionName,
+      hasToken: !!adminToken,
+      tokenPrefix: adminToken.substring(0, 10) + '...'
+    });
+
+    const normalizedToken = adminToken.replace(/^Bearer\s+/i, "");
+    const sourceDirectus = createDirectus(selectedDomain)
+      .with(staticToken(normalizedToken))
+      .with(rest());
+
+    // Test with a simple query first
+    console.log('Making API request to:', `${selectedDomain}/items/${collectionName}?limit=1`);
+    
+    // Try the Directus SDK method first
+    try {
+      const testResult = await sourceDirectus.request(
+        (readItems as any)(collectionName, { limit: 1 }),
+      );
+
+      console.log('Collection access test successful (SDK method):', {
+        collection: collectionName,
+        resultType: typeof testResult,
+        isArray: Array.isArray(testResult),
+        length: Array.isArray(testResult) ? testResult.length : 'N/A'
+      });
+
+      return {
+        success: true,
+        message: `Successfully accessed collection '${collectionName}'`,
+      };
+    } catch (sdkError: any) {
+      console.log('SDK method failed, trying alternative approach:', sdkError.message);
+      
+      // Try alternative approach - test if collection exists first
+      try {
+        const collectionsResult = await sourceDirectus.request(
+          (readItems as any)("directus_collections", { limit: -1 })
+        );
+        
+        const collectionExists = Array.isArray(collectionsResult) && collectionsResult.some((col: any) => col.collection === collectionName);
+        
+        if (!collectionExists) {
+          return {
+            success: false,
+            message: `Collection '${collectionName}' does not exist on the server`,
+            error: {
+              message: 'Collection not found',
+              status: 404,
+            },
+          };
+        }
+        
+        // Collection exists, so the issue is likely permissions
+        return {
+          success: false,
+          message: `Collection '${collectionName}' exists but you don't have permission to access it`,
+          error: {
+            message: sdkError.message,
+            status: sdkError.response?.status || 403,
+            details: sdkError.response?.data,
+          },
+        };
+      } catch (collectionsError: any) {
+        // If we can't even read collections, there's a broader permission issue
+        return {
+          success: false,
+          message: `Cannot access collections list: ${collectionsError.message}`,
+          error: {
+            message: collectionsError.message,
+            status: collectionsError.response?.status,
+            details: collectionsError.response?.data,
+          },
+        };
+      }
+    }
+  } catch (error: any) {
+    console.error('Collection access test failed:', {
+      collectionName,
+      error: error.message,
+      status: error.response?.status,
+      details: error.response?.data,
+      url: selectedDomain,
+      fullError: error
+    });
+    
+    return {
+      success: false,
+      message: `Failed to access collection '${collectionName}': ${error.message}`,
+      error: {
+        message: error.message,
+        status: error.response?.status,
+        details: error.response?.data,
+      },
+    };
+  }
 }
 
 /**
@@ -125,7 +313,7 @@ interface ImportedItem {
 export async function validateDirectusToken(
   selectedDomain: string,
   adminToken: string,
-  api?: any
+  api?: any,
 ): Promise<{
   success: boolean;
   message: string;
@@ -136,7 +324,7 @@ export async function validateDirectusToken(
   error?: any;
 }> {
   const validationLog: any[] = [];
-  
+
   const logStep = (step: string, details: any) => {
     const logEntry = {
       timestamp: new Date().toISOString(),
@@ -148,7 +336,7 @@ export async function validateDirectusToken(
   };
 
   try {
-    logStep('request_received', {
+    logStep("request_received", {
       selectedDomain,
       hasToken: !!adminToken,
     });
@@ -158,59 +346,53 @@ export async function validateDirectusToken(
         hasSelectedDomain: !!selectedDomain,
         hasAdminToken: !!adminToken,
       };
-      logStep('validation_error', error);
+      logStep("validation_error", error);
       return {
         success: false,
-        message: 'Missing required parameters: selectedDomain and adminToken',
-        error: { validationLog }
+        message: "Missing required parameters: selectedDomain and adminToken",
+        error: { validationLog },
       };
     }
 
     // Use the provided API instance or create a new one
-    const directusApi = api || createDirectus(selectedDomain).with(staticToken(adminToken)).with(rest());
+    const normalizedToken = adminToken.replace(/^Bearer\s+/i, "");
+    const directusApi =
+      api || createDirectus(selectedDomain).with(staticToken(normalizedToken)).with(rest());
 
     // Test connection by trying to read collections
-    logStep('token_validation_start', {});
+    logStep("token_validation_start", {});
     try {
-      const collectionsResponse = await directusApi.request(readCollection('directus_collections')) as any[];
-      
-      logStep('token_validation_success', {
-        hasAccess: true,
-        collectionCount: collectionsResponse?.length || 0
-      });
+      const collectionsResponse = (await directusApi.request((readItems as any)("directus_users", { limit: 1 }))) as any[];
 
-      // Get server info
-      const serverInfoResponse = await directusApi.request(readCollection('directus_system_info')) as any;
+      logStep("token_validation_success", {
+        hasAccess: true,
+        collectionCount: collectionsResponse?.length || 0,
+      });
 
       return {
         success: true,
-        message: 'Token validation successful',
-        serverInfo: {
-          version: serverInfoResponse?.version || 'Unknown',
-          project: serverInfoResponse?.project || 'Unknown'
-        }
+        message: "Token validation successful",
+        serverInfo: undefined,
       };
-
     } catch (tokenError: any) {
-      logStep('token_validation_failed', {
+      logStep("token_validation_failed", {
         error: tokenError.message,
         status: tokenError.response?.status,
-        details: tokenError.response?.data
+        details: tokenError.response?.data,
       });
       return {
         success: false,
-        message: 'Invalid admin token or insufficient permissions',
+        message: "Invalid admin token or insufficient permissions",
         error: {
           message: tokenError.message,
           status: tokenError.response?.status,
           details: tokenError.response?.data,
-          validationLog
-        }
+          validationLog,
+        },
       };
     }
-
   } catch (error: any) {
-    logStep('fatal_error', {
+    logStep("fatal_error", {
       message: error.message,
       stack: error.stack,
     });
@@ -221,8 +403,8 @@ export async function validateDirectusToken(
         message: error.message,
         status: error.response?.status,
         details: error.response?.data,
-        validationLog
-      }
+        validationLog,
+      },
     };
   }
 }
@@ -234,7 +416,7 @@ export async function importFromDirectus(
   sourceUrl: string,
   sourceToken: string,
   collectionName: string,
-  apiInstance?: any
+  apiInstance?: any,
 ): Promise<{
   success: boolean;
   message: string;
@@ -243,7 +425,7 @@ export async function importFromDirectus(
   importLog?: ImportLogEntry[];
 }> {
   const importLog: ImportLogEntry[] = [];
-  
+
   const logStep = (step: string, details: Record<string, unknown>) => {
     const logEntry: ImportLogEntry = {
       timestamp: new Date().toISOString(),
@@ -255,7 +437,7 @@ export async function importFromDirectus(
   };
 
   try {
-    logStep('import_start', {
+    logStep("import_start", {
       sourceUrl,
       collectionName,
       hasToken: !!sourceToken,
@@ -264,45 +446,49 @@ export async function importFromDirectus(
     // Validate token first
     const tokenValidation = await validateDirectusToken(sourceUrl, sourceToken, apiInstance);
     if (!tokenValidation.success) {
-      logStep('token_validation_failed', tokenValidation.error);
+      logStep("token_validation_failed", tokenValidation.error);
       return {
         success: false,
-        message: 'Token validation failed',
+        message: "Token validation failed",
         error: tokenValidation.error,
-        importLog
+        importLog,
       };
     }
 
-    logStep('token_validation_success', { serverInfo: tokenValidation.serverInfo });
+    logStep("token_validation_success", { serverInfo: tokenValidation.serverInfo });
 
     // Create source Directus instance
-    const sourceDirectus = createDirectus(sourceUrl).with(staticToken(sourceToken)).with(rest());
+    const normalizedSourceToken = sourceToken.replace(/^Bearer\s+/i, "");
+    const sourceDirectus = createDirectus(sourceUrl).with(staticToken(normalizedSourceToken)).with(rest());
 
     // Fetch data from source server
-    logStep('fetch_data_start', { collectionName });
-    const sourceItems = await sourceDirectus.request(
-      (readItems as any)(collectionName, { limit: -1 })
-    ) as any[];
+    logStep("fetch_data_start", { collectionName });
+    const response = await sourceDirectus.request(
+      (readItems as any)(collectionName, { limit: -1 }),
+    );
+    
+    // Ensure sourceItems is always an array
+    const sourceItems = Array.isArray(response) ? response : [];
 
-    logStep('fetch_data_success', {
-      itemCount: sourceItems?.length || 0,
-      collectionName
+    logStep("fetch_data_success", {
+      itemCount: sourceItems.length,
+      collectionName,
     });
 
-    if (!sourceItems || sourceItems.length === 0) {
-      logStep('collection_empty', { collectionName });
+    if (sourceItems.length === 0) {
+      logStep("collection_empty", { collectionName });
       return {
         success: true,
         message: `Collection '${collectionName}' is empty on the source server`,
         importedItems: [],
-        importLog
+        importLog,
       };
     }
 
     // Import items to current server
-    logStep('import_items_start', {
+    logStep("import_items_start", {
       itemCount: sourceItems.length,
-      collectionName
+      collectionName,
     });
 
     const importedItems: any[] = [];
@@ -313,60 +499,58 @@ export async function importFromDirectus(
       try {
         // Remove system fields that shouldn't be imported
         const { id, date_created, date_updated, user_created, user_updated, ...cleanItem } = item;
-        
+
         // Import the item using the API instance
         const importResponse = await apiInstance.post(`/items/${collectionName}`, cleanItem);
 
         importedItems.push({
           originalId: id,
           newId: importResponse.data?.data?.id,
-          status: 'success',
-          data: importResponse.data?.data
+          status: "success",
+          data: importResponse.data?.data,
         });
         successCount++;
 
-        logStep('item_imported', {
+        logStep("item_imported", {
           originalId: id,
           newId: importResponse.data?.data?.id,
-          collectionName
+          collectionName,
         });
-
       } catch (itemError: any) {
         errorCount++;
         importedItems.push({
           originalId: item.id,
-          status: 'error',
+          status: "error",
           error: {
             message: itemError.message,
             status: itemError.response?.status,
-            details: itemError.response?.data
-          }
+            details: itemError.response?.data,
+          },
         });
 
-        logStep('item_import_failed', {
+        logStep("item_import_failed", {
           originalId: item.id,
           error: itemError.message,
-          collectionName
+          collectionName,
         });
       }
     }
 
-    logStep('import_complete', {
+    logStep("import_complete", {
       totalItems: sourceItems.length,
       successCount,
       errorCount,
-      collectionName
+      collectionName,
     });
 
     return {
       success: true,
       message: `Successfully imported ${successCount} items from ${collectionName} (${errorCount} failed)`,
       importedItems,
-      importLog
+      importLog,
     };
-
   } catch (error: any) {
-    logStep('fatal_error', {
+    logStep("fatal_error", {
       message: error.message,
       stack: error.stack,
     });
@@ -376,9 +560,9 @@ export async function importFromDirectus(
       error: {
         message: error.message,
         status: error.response?.status,
-        details: error.response?.data
+        details: error.response?.data,
       },
-      importLog
+      importLog,
     };
   }
 }
@@ -386,352 +570,34 @@ export async function importFromDirectus(
 /**
  * Imports data from external API
  */
-export async function importFromExternalApi(
-  selectedDomain: string,
-  adminToken: string,
-  collectionName: string,
-  apiInstance?: any
-): Promise<{
-  success: boolean;
-  message: string;
-  importedItems?: any[];
-  error?: any;
-  importLog?: ImportLogEntry[];
-}> {
-  const importLog: ImportLogEntry[] = [];
-  
-  const logStep = (step: string, details: Record<string, unknown>) => {
-    const logEntry: ImportLogEntry = {
-      timestamp: new Date().toISOString(),
-      step,
-      details,
-    };
-    importLog.push(logEntry);
-    console.log(`[${step}]`, details);
-  };
-
-  try {
-    logStep('api_import_start', {
-      selectedDomain,
-      collectionName,
-      hasToken: !!adminToken,
-    });
-
-    // Validate token first
-    const tokenValidation = await validateDirectusToken(selectedDomain, adminToken, apiInstance);
-    if (!tokenValidation.success) {
-      logStep('token_validation_failed', tokenValidation.error);
-      return {
-        success: false,
-        message: 'Token validation failed',
-        error: tokenValidation.error,
-        importLog
-      };
-    }
-
-    logStep('token_validation_success', { serverInfo: tokenValidation.serverInfo });
-
-    // Create source Directus instance
-    const sourceDirectus = createDirectus(selectedDomain).with(staticToken(adminToken)).with(rest());
-
-    // Fetch data from external API
-    logStep('fetch_api_data_start', { collectionName });
-    const apiItems = await sourceDirectus.request(
-      (readItems as any)(collectionName, { limit: -1 })
-    ) as any[];
-
-    logStep('fetch_api_data_success', {
-      itemCount: apiItems?.length || 0,
-      collectionName
-    });
-
-    if (!apiItems || apiItems.length === 0) {
-      logStep('api_collection_empty', { collectionName });
-      return {
-        success: true,
-        message: `Collection '${collectionName}' is empty on the API server`,
-        importedItems: [],
-        importLog
-      };
-    }
-
-    // Import items to current server
-    logStep('import_api_items_start', {
-      itemCount: apiItems.length,
-      collectionName
-    });
-
-    const importedItems: any[] = [];
-    let successCount = 0;
-    let errorCount = 0;
-
-    for (const item of apiItems) {
-      try {
-        // Remove system fields that shouldn't be imported
-        const { id, date_created, date_updated, user_created, user_updated, ...cleanItem } = item;
-        
-        // Import the item using the API instance
-        const importResponse = await apiInstance.post(`/items/${collectionName}`, cleanItem);
-
-        importedItems.push({
-          originalId: id,
-          newId: importResponse.data?.data?.id,
-          status: 'success',
-          data: importResponse.data?.data
-        });
-        successCount++;
-
-        logStep('api_item_imported', {
-          originalId: id,
-          newId: importResponse.data?.data?.id,
-          collectionName
-        });
-
-      } catch (itemError: any) {
-        errorCount++;
-        importedItems.push({
-          originalId: item.id,
-          status: 'error',
-          error: {
-            message: itemError.message,
-            status: itemError.response?.status,
-            details: itemError.response?.data
-          }
-        });
-
-        logStep('api_item_import_failed', {
-          originalId: item.id,
-          error: itemError.message,
-          collectionName
-        });
-      }
-    }
-
-    logStep('api_import_complete', {
-      totalItems: apiItems.length,
-      successCount,
-      errorCount,
-      collectionName
-    });
-
-    return {
-      success: true,
-      message: `Successfully imported ${successCount} items from API for ${collectionName} (${errorCount} failed)`,
-      importedItems,
-      importLog
-    };
-
-  } catch (error: any) {
-    logStep('api_fatal_error', {
-      message: error.message,
-      stack: error.stack,
-    });
-    return {
-      success: false,
-      message: `API import failed: ${error.message}`,
-      error: {
-        message: error.message,
-        status: error.response?.status,
-        details: error.response?.data
-      },
-      importLog
-    };
-  }
-}
-
-/**
- * Simplified import collection handler for browser compatibility
- */
-export async function importCollectionHandler(
-  directus: any,
-  collection: string,
-  selectedDomain: string,
-  req?: any
-): Promise<{
-  success: boolean;
-  message: string;
-  summary?: any;
-  importedData?: any;
-  processedItems?: ImportedItem[];
-  importLog?: any[];
-  error?: any;
-}> {
-  const importLog: any[] = []
-  const logStep = (step: string, details: any) => {
-    const logEntry = {
-      timestamp: new Date().toISOString(),
-      step,
-      details,
-    }
-    importLog.push(logEntry)
-    console.log(`[${step}]`, details)
-  }
-
-  try {
-    logStep('request_received', {
-      selectedDomain,
-      collection
-    })
-
-    if (!selectedDomain) {
-      return {
-        success: false,
-        message: 'Missing required parameter: selectedDomain',
-        error: { importLog }
-      }
-    }
-
-    // Create source Directus instance
-    const sourceDirectus = createDirectus(selectedDomain).with(rest());
-
-    // Fetch data from API
-    logStep('api_request_start', { url: selectedDomain })
-    const items = await sourceDirectus.request(
-      (readItems as any)(collection, { limit: -1 })
-    ) as any[]
-
-    logStep('api_request_complete', {
-      itemCount: items?.length || 0,
-      collection
-    })
-
-    if (!items || items.length === 0) {
-      return {
-        success: true,
-        message: `Collection '${collection}' is empty`,
-        summary: { totalItems: 0 },
-        importedData: { items: [] },
-        processedItems: [],
-        importLog
-      }
-    }
-
-    // Get existing items
-    const existingItems = await directus.request(
-      (readItems as any)(collection, {
-        filter: {
-          id: {
-            _in: items
-              .map((item: any) => (typeof item.id === 'number' && !isNaN(item.id) ? item.id : null))
-              .filter((id: any): id is number => id !== null),
-          },
-        },
-      })
-    )
-
-    const importedItems: ImportedItem[] = []
-
-    // Process each item
-    for (const item of items) {
-      try {
-        const existingItem = existingItems.find((e: any) => e.id === item.id);
-
-        if (existingItem) {
-          // Update existing item
-          const { id, date_created, date_updated, user_created, user_updated, ...cleanItem } = item;
-          await directus.request(
-            (updateItem as any)(collection, existingItem.id, cleanItem)
-          );
-
-          importedItems.push({
-            id: item.id,
-            title: item.title || 'Unknown',
-            status: 'updated',
-            log: []
-          });
-        } else {
-          // Create new item
-          const { id, date_created, date_updated, user_created, user_updated, ...cleanItem } = item;
-          const result = await directus.request(
-            (createItems as any)(collection, [cleanItem])
-          );
-
-          importedItems.push({
-            id: item.id,
-            title: item.title || 'Unknown',
-            status: 'created',
-            log: []
-          });
-        }
-      } catch (error: any) {
-        importedItems.push({
-          id: item.id,
-          title: item.title || 'Unknown',
-          status: 'error',
-          error: error.message,
-          log: []
-        });
-      }
-    }
-
-    const successfulItems = importedItems.filter(item => item.status === 'created' || item.status === 'updated');
-    const failedItems = importedItems.filter(item => item.status === 'error');
-
-    return {
-      success: true,
-      message: `Imported ${importedItems.length} items from ${collection}`,
-      summary: {
-        totalItems: items.length,
-        successful: successfulItems.length,
-        failed: failedItems.length,
-        created: importedItems.filter(item => item.status === 'created').length,
-        updated: importedItems.filter(item => item.status === 'updated').length,
-        collection,
-        sourceUrl: selectedDomain
-      },
-      importedData: {
-        items: importedItems.map(item => ({
-          id: item.id,
-          title: item.title,
-          status: item.status,
-          error: item.error
-        }))
-      },
-      processedItems: importedItems,
-      importLog,
-    };
-
-  } catch (error: any) {
-    logStep('fatal_error', {
-      message: error.message,
-      stack: error.stack,
-    });
-    return {
-      success: false,
-      message: `Error importing collections: ${error.message}`,
-      error: {
-        message: error.message,
-        details: error.response?.data || 'No additional details available',
-      },
-      importLog,
-    };
-  }
-}
 
 /**
  * Analyzes import logs and provides detailed summary
  */
 export function analyzeImportLog(importLog: ImportLogEntry[]) {
   const analysis = {
-    steps: importLog.map(log => ({
+    steps: importLog.map((log) => ({
       timestamp: log.timestamp,
       step: log.step,
-      details: log.details
+      details: log.details,
     })),
     summary: {
       totalSteps: importLog.length,
-      stepsByType: importLog.reduce((acc, log) => {
-        acc[log.step] = (acc[log.step] || 0) + 1;
-        return acc;
-      }, {} as Record<string, number>),
-      errors: importLog.filter(log => log.step.includes('error')),
-      warnings: importLog.filter(log => log.step.includes('warning'))
+      stepsByType: importLog.reduce(
+        (acc, log) => {
+          acc[log.step] = (acc[log.step] || 0) + 1;
+          return acc;
+        },
+        {} as Record<string, number>,
+      ),
+      errors: importLog.filter((log) => log.step.includes("error")),
+      warnings: importLog.filter((log) => log.step.includes("warning")),
     },
     keyMetrics: {
-      startTime: importLog.find(log => log.step === 'import_start')?.timestamp,
-      endTime: importLog.find(log => log.step === 'import_complete')?.timestamp,
-      duration: null as string | null
-    }
+      startTime: importLog.find((log) => log.step === "import_start")?.timestamp,
+      endTime: importLog.find((log) => log.step === "import_complete")?.timestamp,
+      duration: null as string | null,
+    },
   };
 
   // Calculate duration if both start and end times exist
@@ -743,4 +609,121 @@ export function analyzeImportLog(importLog: ImportLogEntry[]) {
   }
 
   return analysis;
-} 
+}
+
+/**
+ * Gets collection data using useApi hook from extensions SDK
+ * This function should be called from within a Vue component setup function
+ */
+export async function getCollectionDataWithUseApi(
+  api: any,
+  collectionName: string,
+  options?: {
+    limit?: number;
+    filter?: any;
+    sort?: string[];
+    fields?: string[];
+  },
+): Promise<{
+  success: boolean;
+  data?: any[];
+  error?: any;
+  total?: number;
+}> {
+  try {
+    const params: any = {};
+
+    if (options?.limit) {
+      params.limit = options.limit;
+    }
+
+    if (options?.filter) {
+      params.filter = options.filter;
+    }
+
+    if (options?.sort) {
+      params.sort = options.sort;
+    }
+
+    if (options?.fields) {
+      params.fields = options.fields;
+    }
+
+    // Use the api instance (from useApi hook) to get collection data
+    const response = await api.get(`/items/${collectionName}`, { params });
+
+    return {
+      success: true,
+      data: response.data?.data || [],
+      total: response.data?.meta?.filter_count || 0,
+    };
+  } catch (error: any) {
+    return {
+      success: false,
+      error: {
+        message: error.message,
+        status: error.response?.status,
+        details: error.response?.data,
+      },
+    };
+  }
+}
+
+/**
+ * Gets all collections using useApi hook from extensions SDK
+ * This function should be called from within a Vue component setup function
+ */
+export async function getAllCollectionsWithUseApi(
+  api: any,
+  excludePatterns?: string[],
+): Promise<{
+  success: boolean;
+  collections?: any[];
+  error?: any;
+}> {
+  try {
+    const defaultExcludePatterns = [
+      "_translations",
+      "_languages",
+      "_extensions",
+      "_operations",
+      "_shares",
+      "_fields",
+      "_migrations",
+      "_versions",
+      "_notifications",
+      "_sessions",
+      "_sync_id",
+    ];
+
+    const patternsToExclude = excludePatterns || defaultExcludePatterns;
+
+    // Use the api instance (from useApi hook) to get all collections
+    const response = await api.get("/collections");
+
+    const allCollections = response.data?.data || [];
+
+    // Filter out system collections and folders
+    const filteredCollections = allCollections.filter((collection: any) => {
+      const isExcluded = patternsToExclude.some((pattern: string) =>
+        collection.collection.includes(pattern),
+      );
+      const isFolder = collection.meta?.is_folder;
+      return !isExcluded && !isFolder;
+    });
+
+    return {
+      success: true,
+      collections: filteredCollections,
+    };
+  } catch (error: any) {
+    return {
+      success: false,
+      error: {
+        message: error.message,
+        status: error.response?.status,
+        details: error.response?.data,
+      },
+    };
+  }
+}

@@ -1,16 +1,15 @@
 # Directus Module Export
 
-A Directus module extension for importing and exporting collection data between different Directus instances or external APIs.
+A Directus module extension for importing collection data from another Directus instance. Simplified for latest Directus versions.
 
 ## Features
 
-- **Data Import/Export**: Transfer collection data between Directus instances
-- **API Integration**: Import data from external APIs
-- **Token Validation**: Secure authentication with admin tokens
-- **History Management**: Save and reuse domain and token configurations
-- **Real-time Status**: Monitor import/export operations with live feedback
-- **Collection Selection**: Choose specific collections for data transfer
-- **Error Handling**: Comprehensive error reporting and recovery
+- **Directus-to-Directus import**: Transfer collection data from a source Directus
+- **Preflight permission check**: Test collection access before importing
+- **Token validation**: Validate admin token against the source server
+- **History management**: Save and reuse domain and token inputs (localStorage)
+- **Real-time status**: Inline progress and concise error messages
+- **Per-collection import**: Import items for a specific collection
 
 ## Installation
 
@@ -20,60 +19,30 @@ A Directus module extension for importing and exporting collection data between 
 npm install directus-module-export
 ```
 
-### Manual Installation
-
-1. Clone this repository or download the extension files
-2. Place them in your Directus extensions folder
-3. Build the extension using `npm run build`
-4. Restart your Directus instance
-
 ## Usage
 
-### Module Interface
+### Quick start
 
-The module provides a user-friendly interface for:
+1. Open the module in your Directus admin.
+2. Enter the source Directus API URL and an admin-access token for that source.
+3. Click “Validate Token” (optional: “Test Collections” for quick permission checks).
+4. For each collection, click “Import from another Directus”.
+5. Review status/output. Failed items are summarized in the console.
 
-1. **Server Configuration**:
-   - Enter target server API URL
-   - Provide admin authentication token
-   - Validate connection and permissions
-
-2. **Data Operations**:
-   - Import data from external APIs
-   - Import data from other Directus instances
-   - Export data to other servers
-
-3. **History Management**:
-   - Save frequently used domains and tokens
-   - Quick selection from history
-   - Clear history for security
+Notes:
+- Provide the token as plain string (no need to prefix with "Bearer ").
+- The module normalizes tokens internally.
 
 ### Configuration
 
-#### Domain Settings
-- Enter domains using the provided input field. Recent domains are automatically saved to your browser's local storage for quick access.
-You can also add custom domains through the interface.
+#### Domain settings
+- Recent domains are stored locally for quick reuse.
 
 #### Authentication
+- **Admin token**: Required on the source Directus to READ the collections you import.
+- **Token validation**: The module verifies token usability before import.
 
-- **Admin Token**: Required for read/write operations
-- **Token Validation**: Automatic validation of permissions
-- **Secure Storage**: Tokens are stored locally for convenience
-
-### API Integration
-
-The module supports importing data from:
-- Directus REST API endpoints
-- Custom API endpoints
-- JSON data sources
-
-### Data Transfer Modes
-
-1. **Import from API**: Fetch data from external API endpoints
-2. **Import from Directus**: Transfer data between Directus instances
-3. **Export to Directus**: Send data to other Directus servers
-
-## Security Considerations
+## Security considerations
 
 - Admin tokens are stored locally in browser storage
 - Token validation ensures proper permissions
@@ -125,38 +94,20 @@ npm run dev
 
 ## Configuration
 
-### Environment Variables
-
-No environment variables are required for basic functionality.
-
-### Directus Configuration
-
-The module integrates seamlessly with Directus and requires no additional configuration beyond standard module installation.
+No environment variables are required. Install and enable the module in your Directus instance per normal extension flow.
 
 ## Troubleshooting
 
-### Common Issues
+### Common issues
 
-1. **Token Validation Fails**:
-   - Ensure the admin token has proper permissions
-   - Check if the target server is accessible
-   - Verify the API URL is correct
+1. **Token validation fails**
+   - Ensure the token is valid and the API URL is reachable over HTTPS.
 
-2. **Import/Export Fails**:
-   - Check network connectivity
-   - Verify collection permissions
-   - Ensure data format compatibility
+2. **403 Forbidden on a collection**
+   - On the source Directus, grant the token’s role READ permission on that collection (and any related collections or files).
 
-3. **History Not Saving**:
-   - Check browser storage permissions
-   - Clear browser cache if needed
-
-### Error Messages
-
-- **"Invalid token"**: Token validation failed
-- **"Server not accessible"**: Network or server issues
-- **"Permission denied"**: Insufficient token permissions
-- **"Collection not found"**: Target collection doesn't exist
+3. **History not saving**
+   - Check browser storage permissions; clear cache if needed.
 
 ## Contributing
 
@@ -179,4 +130,6 @@ For issues and questions:
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md) for version history and updates. 
+See [CHANGELOG.md](CHANGELOG.md) for version history and updates. Notable:
+
+- 1.1.0: Reworked for Directus v11+, import from Directus-only; removed legacy API import and export flows; improved token handling and preflight checks.
