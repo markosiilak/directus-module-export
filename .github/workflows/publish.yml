@@ -1,0 +1,54 @@
+name: Publish to npm
+
+on:
+  push:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - name: Determine versions
+        id: versions
+        run: |
+          PKG_NAME=$(node -p "require('./package.json').name")
+          LOCAL_VERSION=$(node -p "require('./package.json').version")
+          PUBLISHED_VERSION=$(npm view "$PKG_NAME" version || echo '0.0.0')
+          echo "name=$PKG_NAME" >> $GITHUB_OUTPUT
+          echo "local=$LOCAL_VERSION" >> $GITHUB_OUTPUT
+          echo "published=$PUBLISHED_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Skip if version unchanged
+        if: steps.versions.outputs.local == steps.versions.outputs.published
+        run: |
+          echo "Local version (${{ steps.versions.outputs.local }}) is already published (${{ steps.versions.outputs.published }}). Skipping publish."
+
+      - name: Install dependencies
+        if: steps.versions.outputs.local != steps.versions.outputs.published
+        run: npm ci
+
+      - name: Build
+        if: steps.versions.outputs.local != steps.versions.outputs.published
+        run: npm run build
+
+      - name: Publish to npm
+        if: steps.versions.outputs.local != steps.versions.outputs.published
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
+
+
