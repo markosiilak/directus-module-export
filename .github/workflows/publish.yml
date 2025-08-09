@@ -3,8 +3,6 @@ name: Publish to npm
 on:
   push:
     branches: [ master, main ]
-    paths:
-      - 'extensions/module-export/**'
   workflow_dispatch:
 
 permissions:
@@ -13,9 +11,6 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: extensions/module-export
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,7 +21,7 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
-          cache-dependency-path: extensions/module-export/package-lock.json
+          cache-dependency-path: package-lock.json
           always-auth: true
 
       - name: Determine versions
