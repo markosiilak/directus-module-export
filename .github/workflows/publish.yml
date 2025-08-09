@@ -27,6 +27,7 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
           cache-dependency-path: extensions/module-export/package-lock.json
+          always-auth: true
 
       - name: Determine versions
         id: versions
@@ -66,7 +67,8 @@ jobs:
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> ~/.npmrc
+          echo "registry=https://registry.npmjs.org/" >> ~/.npmrc
           npm whoami || true
 
       - name: Publish to npm
