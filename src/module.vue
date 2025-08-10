@@ -49,13 +49,11 @@
             <v-icon name="verified_user" left />
             Validate Token
           </v-button>
-          
+
           <v-button small secondary :loading="loadingStates['test_collections']" @click="testCollections">
             <v-icon name="bug_report" left />
             Test Collections
           </v-button>
-          
-
 
           <div v-if="domainHistory.length > 0 || tokenHistory.length > 0" class="history-buttons">
             <v-button v-if="domainHistory.length > 0" small secondary @click="clearDomainHistory">
@@ -80,7 +78,7 @@
 
         <div v-for="collection in collections" :key="collection.collection" class="api-buttons">
           <h2 class="title type-title uppercase">{{ collection.collection }}</h2>
-          <div></div>
+          <div />
           <div class="collection-buttons">
             <v-button
               small
@@ -100,8 +98,9 @@
 
 <script lang="ts">
   import { useApi } from '@directus/extensions-sdk';
-  import { defineComponent, onMounted, ref, watch, Ref } from 'vue';
-  import { validateDirectusToken, importFromDirectus } from './utils/apiHandlers';
+  import { defineComponent, onMounted, Ref, ref, watch } from 'vue';
+
+  import { importFromDirectus, validateDirectusToken } from './utils/apiHandlers';
 
   // Type definitions
   interface ApiError {
@@ -179,8 +178,6 @@
 
   type InputMode = 'select' | 'input';
 
-  
-
   export default defineComponent({
     name: 'ImportPushCollections',
     setup(): {
@@ -211,7 +208,7 @@
       const collections = ref<Collection[]>([]);
       const loadingStates = ref<LoadingStates>({
         import: false,
-          push: false,
+        push: false,
         token_validation: false,
         test_collections: false
       });
@@ -228,7 +225,7 @@
       onMounted(async (): Promise<void> => {
         const savedDomainHistory = localStorage.getItem('domainHistory');
         const savedTokenHistory = localStorage.getItem('tokenHistory');
-        
+
         if (savedDomainHistory) {
           try {
             domainHistory.value = JSON.parse(savedDomainHistory);
@@ -237,7 +234,7 @@
             domainHistory.value = [];
           }
         }
-        
+
         if (savedTokenHistory) {
           try {
             tokenHistory.value = JSON.parse(savedTokenHistory);
@@ -246,7 +243,7 @@
             tokenHistory.value = [];
           }
         }
-        
+
         console.log(
           'Initial selectedDomain from localStorage:',
           localStorage.getItem('selectedDomain')
@@ -415,7 +412,7 @@
         try {
           setLoading('token_validation', '', true);
           operationStatus.value = null;
-          
+
           const token = adminToken.value;
 
           // Use the local validation function
@@ -459,20 +456,20 @@
         try {
           setLoading('test_collections', '', true);
           operationStatus.value = null;
-          
+
           const token = adminToken.value;
 
           // Import the test function
           const { testMultipleCollections } = await import('./utils/apiHandlers');
-          
+
           // Test multiple collections
           const result = await testMultipleCollections(selectedDomain.value, token);
-          
+
           // Create a summary of results
           const successfulCollections = Object.entries(result.results)
             .filter(([_, res]) => res.success)
             .map(([name, _]) => name);
-          
+
           const failedCollections = Object.entries(result.results)
             .filter(([_, res]) => !res.success)
             .map(([name, res]) => `${name}: ${res.message}`);
@@ -493,7 +490,6 @@
 
           // Log detailed results to console
           console.log('Collection test results:', result.results);
-          
         } catch (error: any) {
           console.error('Collection test error:', error);
           operationStatus.value = {
@@ -505,8 +501,6 @@
           setLoading('test_collections', '', false);
         }
       };
-
-
 
       const importFromLive = async (collectionName: string): Promise<void> => {
         if (!selectedDomain.value || !adminToken.value) {
