@@ -49,6 +49,30 @@ Notes:
 - Provide the token as plain string (no need to prefix with "Bearer ").
 - The module normalizes tokens internally.
 
+### File importing
+
+- Supported fields:
+  - Single-file fields referencing Directus files by UUID (string) or object with `id`
+  - Array/many-file relations are skipped (logged as `file_copy_skip`)
+- Reuse vs copy:
+  - If a target item already has a file in a field and it matches the source by checksum (preferred) or file size/type, the existing file is reused
+  - When reusing, the file may be patched to set `title` (from item title, if present) and move it into the target folder
+- Upload behavior:
+  - Source file metadata fetched from `/files/{id}`; binary fetched from `/assets/{id}`
+  - Files are uploaded to the target via `/files` with `FormData` (`file`, optional `title`, `folder`, `filename_download`)
+  - Files are placed in a folder named after the collection; the folder is auto-created if missing
+  - Title source: uses the item's `title` if available, otherwise first non-empty translation `title`
+- Caching:
+  - Per-run cache avoids re-uploading the same source file across multiple items
+  - Per-item cache prevents duplicate uploads within the same item
+- Update mapping (idempotent, optional):
+  - If the `directus_sync_id_map` collection exists on the target, imports update existing items mapped by source `id`; otherwise new items are created
+- Permissions required:
+  - Source: read `/items/{collection}`, `/files/{id}`, `/assets/{id}`
+  - Target: create/update `/items/{collection}`, `/files`, `/folders`, and (optionally) read/write `directus_sync_id_map`
+- Error tolerance:
+  - If a file copy fails, the item import continues and the field is left unchanged; details are logged as `file_copy_error`
+
 ### Configuration
 
 #### Domain settings
@@ -111,22 +135,6 @@ npm run dev
 ## Configuration
 
 No environment variables are required. Install and enable the module in your Directus instance per normal extension flow.
-
-## CI / CD (Auto-publish to npm)
-
-This package can publish automatically to npm when changes are pushed.
-
-- Workflow location: `extensions/module-export/.github/workflows/publish.yml`
-- Triggers: Push to `master`/`main` affecting `extensions/module-export/**` or manual dispatch
-- Requirements:
-  - Repository secret `NPM_TOKEN` with publish access
-  - Version bump in `extensions/module-export/package.json` (workflow skips if version unchanged)
-
-Manual publish (optional):
-```bash
-npm version patch   # or minor/major
-npm publish --access public
-```
 
 ## Troubleshooting
 
