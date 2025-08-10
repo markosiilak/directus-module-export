@@ -12,12 +12,15 @@ A Directus module extension for importing collection data from another Directus 
 
 ## Features
 
-- **Directus-to-Directus import**: Transfer collection data from a source Directus
+- **Directus-to-Directus import**: Transfer collection data from a source Directus instance to your current project
+- **Export to file**: Download collection data from your Directus instance for backup or transfer
 - **Preflight permission check**: Test collection access before importing
 - **Token validation**: Validate admin token against the source server
 - **History management**: Save and reuse domain and token inputs (localStorage)
 - **Real-time status**: Inline progress and concise error messages
 - **Per-collection import**: Import items for a specific collection
+- **File field support**: Automatically copies single-file fields (by UUID or object) and reuses or uploads as needed
+- **Folder auto-creation**: Files are placed in a collection-named folder, created if missing
 
 ### At a glance
 
@@ -39,11 +42,14 @@ npm install directus-module-export
 
 ### Quick start
 
-1. Open the module in your Directus admin.
+1. Open the module in your Directus admin interface.
 2. Enter the source Directus API URL and an admin-access token for that source.
-3. Click “Validate Token” (optional: “Test Collections” for quick permission checks).
-4. For each collection, click “Import from another Directus”.
-5. Review status/output. Failed items are summarized in the console.
+3. (Optional) Click “Validate Token” to check the token, or “Test Collections” to quickly verify collection permissions.
+4. For each collection you want to import, click “Import from another Directus”.
+5. Monitor the import progress and review the status/output. Any failed items will be summarized in the console.
+6. (Optional) To export data from your current Directus instance, use the "Export" button available in the module interface. This will allow you to download collection data for backup or transfer.
+7. (Optional) Use the "History" feature to quickly reuse previously entered domains and tokens.
+8. (Optional) Use the "Clear History" option to remove stored domains and tokens for security.
 
 Notes:
 - Provide the token as plain string (no need to prefix with "Bearer ").
@@ -84,18 +90,24 @@ Notes:
 
 ## Security considerations
 
-- Admin tokens are stored locally in browser storage
-- Token validation ensures proper permissions
-- Clear history options for sensitive data
-- Secure API communication over HTTPS
+- Admin tokens are stored locally in browser storage.
+- Token validation ensures proper permissions.
+- Clear history options are available for sensitive data.
+- Secure API communication is enforced over HTTPS.
+- Imported data is not sent to third-party services; all transfers are direct between your browser and the specified Directus instances.
+- Only the collections and fields you select are accessed; no other data is read or modified.
+- The module does not store or transmit your data outside your environment.
+- For best security, use temporary admin tokens and clear history after use.
 
 ## Development
 
 ### Prerequisites
 
-- Node.js >= 16.0.0
-- Directus Extensions SDK
+- Node.js >= 22 (already installed, do not install manually)
+- Directus Extensions SDK (`@directus/extensions-sdk`)
 - TypeScript
+- [Directus CLI](https://docs.directus.io/cli/) (for building and linking extensions)
+- npm (Node.js package manager)
 
 ### Setup
 
@@ -152,13 +164,6 @@ No environment variables are required. Install and enable the module in your Dir
 3. **History not saving**
    - Check browser storage permissions; clear cache if needed.
 
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
 
 ## License
 
