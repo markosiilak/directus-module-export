@@ -417,6 +417,7 @@ export async function importFromDirectus(
   sourceToken: string,
   collectionName: string,
   apiInstance?: any,
+  limit?: number,
 ): Promise<{
   success: boolean;
   message: string;
@@ -461,10 +462,36 @@ export async function importFromDirectus(
     const normalizedSourceToken = sourceToken.replace(/^Bearer\s+/i, "");
     const sourceDirectus = createDirectus(sourceUrl).with(staticToken(normalizedSourceToken)).with(rest());
 
+    // Ensure target folder exists (name: collectionName) and get its ID
+    const targetFolderName = collectionName;
+    let targetFolderId: string | null = null;
+    try {
+      const findFolderRes = await apiInstance.get('/folders', {
+        params: {
+          limit: 1,
+          filter: { name: { _eq: targetFolderName } },
+        },
+      });
+      const existingFolder = findFolderRes?.data?.data?.[0];
+      if (existingFolder?.id) {
+        targetFolderId = existingFolder.id;
+      } else {
+        const createFolderRes = await apiInstance.post('/folders', {
+          name: targetFolderName,
+          parent: null,
+        });
+        targetFolderId = createFolderRes?.data?.data?.id || null;
+      }
+      logStep('target_folder_ready', { name: targetFolderName, id: targetFolderId });
+    } catch (folderErr: any) {
+      logStep('target_folder_error', { name: targetFolderName, error: folderErr.message });
+    }
+
     // Fetch data from source server
     logStep("fetch_data_start", { collectionName });
+    const fetchLimit = typeof limit === 'number' && limit > 0 ? limit : -1;
     const response = await sourceDirectus.request(
-      (readItems as any)(collectionName, { limit: -1 }),
+      (readItems as any)(collectionName, { limit: fetchLimit }),
     );
     
     // Ensure sourceItems is always an array
@@ -485,6 +512,49 @@ export async function importFromDirectus(
       };
     }
 
+    // Helper: copy a Directus file from source to target and return new file id
+    const fileIdCache = new Map<string, string>();
+    const copyFileToTarget = async (fileId: string): Promise<string> => {
+      if (fileIdCache.has(fileId)) return fileIdCache.get(fileId)!;
+      try {
+        const metaRes = await fetch(`${sourceUrl}/files/${fileId}`, {
+          headers: { Authorization: `Bearer ${normalizedSourceToken}` },
+        });
+        if (!metaRes.ok) {
+          throw new Error(`Source file metadata not accessible (status ${metaRes.status})`);
+        }
+        const metaJson = await metaRes.json();
+        const fileMeta = metaJson?.data || {};
+
+        const binRes = await fetch(`${sourceUrl}/assets/${fileId}`, {
+          headers: { Authorization: `Bearer ${normalizedSourceToken}` },
+        });
+        if (!binRes.ok) {
+          throw new Error(`Source file binary not accessible (status ${binRes.status})`);
+        }
+        const blob = await binRes.blob();
+        const filename = fileMeta.filename_download || fileMeta.filename || `${fileId}`;
+        // Prefer using Blob with a filename to avoid environments without File constructor
+        const formData = new FormData();
+        formData.append('file', blob, filename);
+        if (fileMeta.title) formData.append('title', fileMeta.title);
+        // Save to target folder named "Collection" when available
+        if (targetFolderId) {
+          formData.append('folder', targetFolderId);
+        }
+        // preserve download filename if present
+        if (fileMeta.filename_download) formData.append('filename_download', fileMeta.filename_download);
+
+        const uploadRes = await apiInstance.post('/files', formData);
+        const newId = uploadRes?.data?.data?.id;
+        if (!newId) throw new Error('Target upload did not return an ID');
+        fileIdCache.set(fileId, String(newId));
+        return String(newId);
+      } catch (e: any) {
+        throw new Error(`File copy failed for ${fileId}: ${e.message}`);
+      }
+    };
+
     // Import items to current server
     logStep("import_items_start", {
       itemCount: sourceItems.length,
@@ -495,10 +565,44 @@ export async function importFromDirectus(
     let successCount = 0;
     let errorCount = 0;
 
-    for (const item of sourceItems) {
+    const itemsToImport =
+      typeof limit === 'number' && limit > 0 ? sourceItems.slice(0, limit) : sourceItems;
+
+    for (const item of itemsToImport) {
       try {
         // Remove system fields that shouldn't be imported
         const { id, date_created, date_updated, user_created, user_updated, ...cleanItem } = item;
+
+        // Detect and copy single-file fields from source to target
+        for (const key of Object.keys(cleanItem)) {
+          try {
+            const value: any = (cleanItem as any)[key];
+            if (!value) continue;
+            // Skip arrays (multi-file relations often require junction payloads)
+            if (Array.isArray(value)) {
+              logStep('file_copy_skip', { reason: 'array_not_supported', field: key, itemId: id });
+              continue;
+            }
+            // Determine candidate file id
+            const candidateId = typeof value === 'string' ? value : (typeof value === 'object' && value.id ? value.id : null);
+            if (!candidateId || typeof candidateId !== 'string') continue;
+
+            // Probe if this id corresponds to a file on source
+            const headRes = await fetch(`${sourceUrl}/files/${candidateId}`, {
+              method: 'GET',
+              headers: { Authorization: `Bearer ${normalizedSourceToken}` },
+            });
+            if (!headRes.ok) continue; // Not a file; leave as is
+
+            logStep('file_copy_start', { field: key, sourceFileId: candidateId, itemId: id });
+            const newFileId = await copyFileToTarget(candidateId);
+            (cleanItem as any)[key] = newFileId;
+            logStep('file_copy_success', { field: key, sourceFileId: candidateId, newFileId, itemId: id });
+          } catch (fileErr: any) {
+            logStep('file_copy_error', { field: key, itemId: id, error: fileErr.message });
+            // Proceed without changing the field
+          }
+        }
 
         // Import the item using the API instance
         const importResponse = await apiInstance.post(`/items/${collectionName}`, cleanItem);

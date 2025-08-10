@@ -43,6 +43,18 @@
                 <v-icon :name="tokenInputMode === 'select' ? 'edit' : 'list'" />
               </v-button>
             </div>
+            <div class="input-group">
+              <v-input
+                v-model.number="importLimit"
+                type="number"
+                min="1"
+                placeholder="Max items to import (optional)"
+                :disabled="loadingStates['import']"
+                class="limit-input" />
+              <v-button small secondary icon="true" @click="importLimit = null">
+                <v-icon name="close" />
+              </v-button>
+            </div>
           </div>
 
           <v-button small secondary :loading="loadingStates['token_validation']" @click="validateToken">
@@ -97,6 +109,7 @@
 </template>
 
 <script lang="ts">
+  /* eslint-disable react-hooks/rules-of-hooks */
   import { useApi } from '@directus/extensions-sdk';
   import { defineComponent, onMounted, Ref, ref, watch } from 'vue';
 
@@ -186,6 +199,7 @@
       loadingStates: Ref<LoadingStates>;
       selectedDomain: Ref<string>;
       adminToken: Ref<string>;
+      importLimit: Ref<number | null>;
       domainHistory: Ref<string[]>;
       tokenHistory: Ref<string[]>;
       domainInputMode: Ref<InputMode>;
@@ -214,6 +228,8 @@
       });
       const selectedDomain = ref<string>(localStorage.getItem('selectedDomain') || '');
       const adminToken = ref<string>(localStorage.getItem('adminToken') || '');
+      const savedLimit = localStorage.getItem('importLimit');
+      const importLimit = ref<number | null>(savedLimit ? Number(savedLimit) || null : null);
       const domainHistory = ref<string[]>([]);
       const tokenHistory = ref<string[]>([]);
       const domainInputMode = ref<InputMode>((localStorage.getItem('domainInputMode') as InputMode) || 'select');
@@ -337,6 +353,15 @@
           }
         } else {
           localStorage.removeItem('adminToken');
+        }
+      });
+
+      // Persist importLimit
+      watch(importLimit, (newLimit: number | null): void => {
+        if (newLimit && newLimit > 0) {
+          localStorage.setItem('importLimit', String(newLimit));
+        } else {
+          localStorage.removeItem('importLimit');
         }
       });
 
@@ -536,8 +561,14 @@
             console.warn('Preflight access test failed; proceeding to import', preflightError?.message);
           }
 
-          // Use the local import function
-          const result: ImportResult = await importFromDirectus(selectedDomain.value, token, collectionName, api);
+          // Use the local import function with optional limit
+          const result: ImportResult = await importFromDirectus(
+            selectedDomain.value,
+            token,
+            collectionName,
+            api,
+            importLimit.value ?? undefined,
+          );
 
           if (result.success) {
             // Calculate success/failure statistics
@@ -640,6 +671,7 @@
         loadingStates,
         selectedDomain,
         adminToken,
+        importLimit,
         domainHistory,
         tokenHistory,
         domainInputMode,
@@ -738,6 +770,11 @@ p {
 }
 
 .token-input {
+  flex: 1;
+  margin-bottom: 12px;
+}
+
+.limit-input {
   flex: 1;
   margin-bottom: 12px;
 }
