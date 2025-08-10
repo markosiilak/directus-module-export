@@ -117,9 +117,12 @@ npm run link
 
 ```
 src/
-├── index.ts          # Module definition
-├── module.vue        # Main Vue component
-└── shims.d.ts        # TypeScript declarations
+├── index.ts              # Module definition
+├── module.vue            # Main Vue component
+├── utils/
+│   ├── apiHandlers.ts    # API logic for import, validation, and sync
+│   └── helpers.ts        # Utility/helper functions
+└── shims.d.ts            # TypeScript declaration
 ```
 
 ### Building
