@@ -1,12 +1,18 @@
 ## [1.1.9] - 2025-08-11
 
 ### Added
+- File importing: support for single-file fields; reuse existing by checksum/size; upload missing files to a collection-named folder (auto-created) with optional title
 - Version 1.1.9 release
 
 ## [1.1.8] - 2025-08-11
 
 ### Added
 - Version 1.1.8 release
+
+## [1.1.7] - 2025-08-10
+
+### Added
+- Version 1.1.7 release
 
 # Changelog
 
