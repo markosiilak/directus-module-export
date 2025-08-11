@@ -3,24 +3,25 @@
 <p align="left">
   <a href="https://github.com/markosiilak/directus-module-export"><img alt="GitHub Repo" src="https://img.shields.io/badge/GitHub-markosiilak%2Fdirectus--module--export-181717?logo=github" /></a>
   <a href="https://github.com/markosiilak/directus-module-export/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/License-MIT-green.svg" /></a>
-  <a href="#"><img alt="Directus" src="https://img.shields.io/badge/Directus-11%2B-263238?logo=directus&logoColor=white" /></a>
+  <a href="#"><img alt="Directus" src="https://img.shields.io/badge/Directus-11--15-263238?logo=directus&logoColor=white" /></a>
   <a href="#"><img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white" /></a>
   <a href="https://www.npmjs.com/package/directus-module-export"><img alt="npm" src="https://img.shields.io/npm/v/directus-module-export?color=CB3837&logo=npm" /></a>
+  <a href="https://www.npmjs.com/package/directus-module-export"><img alt="Downloads" src="https://img.shields.io/npm/dm/directus-module-export?label=downloads&logo=npm" /></a>
 </p>
 
 A Directus module extension for importing collection data from another Directus instance. Simplified for latest Directus versions.
 
-## Features
+## Features ✨
 
-- **Directus-to-Directus import**: Transfer collection data from a source Directus instance to your current project
-- **Export to file**: Download collection data from your Directus instance for backup or transfer
-- **Preflight permission check**: Test collection access before importing
-- **Token validation**: Validate admin token against the source server
-- **History management**: Save and reuse domain and token inputs (localStorage)
-- **Real-time status**: Inline progress and concise error messages
-- **Per-collection import**: Import items for a specific collection
-- **File field support**: Automatically copies single-file fields (by UUID or object) and reuses or uploads as needed
-- **Folder auto-creation**: Files are placed in a collection-named folder, created if missing
+- **Directus-to-Directus import 🔁**: Transfer collection data from a source Directus instance to your current project
+- **Export to file 📦**: Download collection data from your Directus instance for backup or transfer
+- **Preflight permission check ✅**: Test collection access before importing
+- **Token validation 🛡️**: Validate admin token against the source server
+- **History management 🕘**: Save and reuse domain and token inputs (localStorage)
+- **Real-time status 📊**: Inline progress and concise error messages
+- **Per-collection import 🧩**: Import items for a specific collection
+- **File field support 🖼️**: Automatically copies single-file fields (by UUID or object) and reuses or uploads as needed
+- **Folder auto-creation 📁**: Files are placed in a collection-named folder, created if missing
 
 ### At a glance
 
@@ -30,7 +31,7 @@ A Directus module extension for importing collection data from another Directus 
   <img alt="Check" title="Preflight Check" src="https://img.shields.io/badge/Preflight-Check-F39C12?style=for-the-badge&logo=checkmarx" />
 </p>
 
-## Installation
+## Installation 📦
 
 ### From npm
 
@@ -38,9 +39,9 @@ A Directus module extension for importing collection data from another Directus 
 npm install directus-module-export
 ```
 
-## Usage
+## Usage ▶️
 
-### Quick start
+### Quick start ⚡
 
 1. Open the module in your Directus admin interface.
 2. Enter the source Directus API URL and an admin-access token for that source.
@@ -55,7 +56,7 @@ Notes:
 - Provide the token as plain string (no need to prefix with "Bearer ").
 - The module normalizes tokens internally.
 
-### File importing
+### File importing 🖼️
 
 - Supported fields:
   - Single-file fields referencing Directus files by UUID (string) or object with `id`
@@ -79,16 +80,16 @@ Notes:
 - Error tolerance:
   - If a file copy fails, the item import continues and the field is left unchanged; details are logged as `file_copy_error`
 
-### Configuration
+### Configuration ⚙️
 
-#### Domain settings
+#### Domain settings 🌐
 - Recent domains are stored locally for quick reuse.
 
-#### Authentication
+#### Authentication 🔐
 - **Admin token**: Required on the source Directus to READ the collections you import.
 - **Token validation**: The module verifies token usability before import.
 
-## Security considerations
+## Security considerations 🔒
 
 - Admin tokens are stored locally in browser storage.
 - Token validation ensures proper permissions.
@@ -99,7 +100,7 @@ Notes:
 - The module does not store or transmit your data outside your environment.
 - For best security, use temporary admin tokens and clear history after use.
 
-## Development
+## Development 🧰
 
 ### Prerequisites
 
@@ -151,7 +152,7 @@ npm run dev
 
 No environment variables are required. Install and enable the module in your Directus instance per normal extension flow.
 
-## Troubleshooting
+## Troubleshooting 🛠️
 
 ### Common issues
 
@@ -165,18 +166,18 @@ No environment variables are required. Install and enable the module in your Dir
    - Check browser storage permissions; clear cache if needed.
 
 
-## License
+## License 📝
 
 MIT License - see [LICENSE](LICENSE) file for details.
 
-## Support
+## Support 💬
 
 For issues and questions:
 - Create an issue on GitHub
 - Check the documentation
 - Review the troubleshooting section
 
-## Changelog
+## Changelog 📑
 
 See [CHANGELOG.md](CHANGELOG.md) for version history and updates. Notable:
 
