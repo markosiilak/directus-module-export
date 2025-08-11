@@ -1,3 +1,13 @@
+## [1.1.10] - 2025-08-11
+
+### Changed
+- Widened Directus compatibility: `@directus/extensions-sdk` peer range `>=11 <16` and `directus:extension.host` to `>=11.0.0 <16.0.0` to support Directus SDK v15.
+
+## [1.1.10] - 2025-08-11
+
+### Changed
+- Widened Directus compatibility: `@directus/extensions-sdk` peer range `>=11 <16` and `directus:extension.host` to `>=11.0.0 <16.0.0` to support Directus SDK v15.
+
 ## [1.1.9] - 2025-08-11
 
 ### Added

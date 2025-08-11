@@ -1,6 +1,6 @@
 {
   "name": "directus-module-export",
-  "version": "1.1.9",
+  "version": "1.1.10",
   "description": "Directus module for importing and exporting collection data between servers",
   "keywords": [
     "directus",
@@ -36,7 +36,7 @@
     "type": "module",
     "path": "dist/index.js",
     "source": "src/index.ts",
-    "host": "^11.0.0"
+    "host": ">=11.0.0 <16.0.0"
   },
   "scripts": {
     "build": "directus-extension build",
@@ -50,10 +50,10 @@
     "node": ">=16.0.0"
   },
   "peerDependencies": {
-    "@directus/extensions-sdk": "^11.0.0"
+    "@directus/extensions-sdk": ">=11 <16"
   },
   "devDependencies": {
-    "@directus/extensions-sdk": "^11.0.0",
+    "@directus/extensions-sdk": "^15.0.0",
     "typescript": "^5.0.0"
   },
   "dependencies": {
