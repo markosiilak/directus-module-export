@@ -109,7 +109,7 @@
 </template>
 
 <script lang="ts">
-  /* eslint-disable react-hooks/rules-of-hooks */
+   
   import { useApi } from '@directus/extensions-sdk';
   import { defineComponent, onMounted, Ref, ref, watch } from 'vue';
 

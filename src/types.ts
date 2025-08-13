@@ -39,11 +39,11 @@ export interface ImportResult {
 export interface ImportedItem {
   originalId: string | number;
   newId?: string | number;
-  status: 'success' | 'error';
+  status: "success" | "error";
   data?: any;
   error?: {
     message: string;
     status?: number;
     details?: any;
   };
-} 
+}
