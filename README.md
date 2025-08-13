@@ -13,13 +13,13 @@ A Directus module extension for importing collection data from another Directus 
 
 ## Features ✨
 
-- **Directus-to-Directus import 🔁**: Transfer collection data from a source Directus instance to your current project
-- **Export to file 📦**: Download collection data from your Directus instance for backup or transfer
+- **Directus-to-Directus import 🔁**: Transfer collection data from another Directus instance into your current project
 - **Preflight permission check ✅**: Test collection access before importing
 - **Token validation 🛡️**: Validate admin token against the source server
 - **History management 🕘**: Save and reuse domain and token inputs (localStorage)
 - **Real-time status 📊**: Inline progress and concise error messages
 - **Per-collection import 🧩**: Import items for a specific collection
+- **Import limit option ⏱️**: Optionally limit how many items to import per run
 - **File field support 🖼️**: Automatically copies single-file fields (by UUID or object) and reuses or uploads as needed
 - **Folder auto-creation 📁**: Files are placed in a collection-named folder, created if missing
 
@@ -46,11 +46,10 @@ npm install directus-module-export
 1. Open the module in your Directus admin interface.
 2. Enter the source Directus API URL and an admin-access token for that source.
 3. (Optional) Click “Validate Token” to check the token, or “Test Collections” to quickly verify collection permissions.
-4. For each collection you want to import, click “Import from another Directus”.
-5. Monitor the import progress and review the status/output. Any failed items will be summarized in the console.
-6. (Optional) To export data from your current Directus instance, use the "Export" button available in the module interface. This will allow you to download collection data for backup or transfer.
-7. (Optional) Use the "History" feature to quickly reuse previously entered domains and tokens.
-8. (Optional) Use the "Clear History" option to remove stored domains and tokens for security.
+4. (Optional) Enter a limit to cap the number of items imported per collection.
+5. For each collection you want to import, click “Import from another Directus”.
+6. Monitor the import progress and review the status/output. Any failed items will be summarized in the console.
+7. (Optional) Use the "History" feature to quickly reuse previously entered domains and tokens, or the "Clear History" options to remove them.
 
 Notes:
 - Provide the token as plain string (no need to prefix with "Bearer ").
@@ -104,7 +103,7 @@ Notes:
 
 ### Prerequisites
 
-- Node.js >= 22 (already installed, do not install manually)
+- Node.js >= 16
 - Directus Extensions SDK (`@directus/extensions-sdk`)
 - TypeScript
 - [Directus CLI](https://docs.directus.io/cli/) (for building and linking extensions)
@@ -132,9 +131,9 @@ npm run link
 src/
 ├── index.ts              # Module definition
 ├── module.vue            # Main Vue component
+├── types.ts              # Shared types
 ├── utils/
-│   ├── apiHandlers.ts    # API logic for import, validation, and sync
-│   └── helpers.ts        # Utility/helper functions
+│   └── apiHandlers.ts    # API logic for import, validation, and sync
 └── shims.d.ts            # TypeScript declaration
 ```
 
@@ -151,6 +150,11 @@ npm run dev
 ## Configuration
 
 No environment variables are required. Install and enable the module in your Directus instance per normal extension flow.
+
+### Compatibility
+
+- Directus host: >= 11.0.0 < 16.0.0
+- `@directus/extensions-sdk` peer range: >= 11 < 16
 
 ## Troubleshooting 🛠️
 
@@ -182,3 +186,7 @@ For issues and questions:
 See [CHANGELOG.md](CHANGELOG.md) for version history and updates. Notable:
 
 - 1.1.0: Reworked for Directus v11+, import from Directus-only; removed legacy API import and export flows; improved token handling and preflight checks.
+
+## Notes
+
+- Export-to-file functionality is not currently included in this module.

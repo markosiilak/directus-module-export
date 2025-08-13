@@ -1,3 +1,13 @@
+## [1.1.13] - 2025-08-13
+
+### Changed
+- README: updated features, usage, prerequisites, compatibility; removed export mention
+
+## [1.1.14] - 2025-08-13
+
+### Security
+- Removed unused axios runtime dependency flagged by Socket; package has no runtime deps now
+
 ## [1.1.12] - 2025-08-11
 
 ### Added
