@@ -1,3 +1,14 @@
+## [1.1.15] - 2025-01-15
+
+### Added
+- Title filter feature: Filter imports by title from the translations table
+- Enhanced UI with labeled input fields for better user experience
+- Real-time filter feedback showing current filter criteria
+
+### Changed
+- Improved input layout with clear labels for Server URL, Admin Token, Import Limit, and Title Filter
+- Better visual organization of form controls with proper spacing and alignment
+
 ## [1.1.13] - 2025-08-13
 
 ### Changed

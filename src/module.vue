@@ -11,49 +11,77 @@
         <div class="domain-selector">
           <div class="api-inputs">
             <div class="input-group">
-              <component
-                :is="domainInputMode === 'select' ? 'v-select' : 'v-input'"
-                v-model="selectedDomain"
-                :items="domainInputMode === 'select' ? domainHistory : undefined"
-                :filter="domainInputMode === 'select' ? customFilter : undefined"
-                placeholder="Enter server API URL"
-                :disabled="loadingStates['import']"
-                class="domain-input"
-                :searchable="domainInputMode === 'select'"
-                :allow-input="domainInputMode === 'select'"
-                @update:model-value="handleDomainSelect" />
-              <v-button small secondary icon="true" @click="toggleDomainInputMode">
-                <v-icon :name="domainInputMode === 'select' ? 'edit' : 'list'" />
-              </v-button>
+              <div class="input-label">Server URL:</div>
+              <div class="input-row">
+                <component
+                  :is="domainInputMode === 'select' ? 'v-select' : 'v-input'"
+                  v-model="selectedDomain"
+                  :items="domainInputMode === 'select' ? domainHistory : undefined"
+                  :filter="domainInputMode === 'select' ? customFilter : undefined"
+                  placeholder="Enter server API URL"
+                  :disabled="loadingStates['import']"
+                  class="domain-input"
+                  :searchable="domainInputMode === 'select'"
+                  :allow-input="domainInputMode === 'select'"
+                  @update:model-value="handleDomainSelect" />
+                <v-button small secondary icon="true" @click="toggleDomainInputMode">
+                  <v-icon :name="domainInputMode === 'select' ? 'edit' : 'list'" />
+                </v-button>
+              </div>
             </div>
             <div class="input-group">
-              <component
-                :is="tokenInputMode === 'select' ? 'v-select' : 'v-input'"
-                v-model="adminToken"
-                :items="tokenInputMode === 'select' ? tokenHistory : undefined"
-                :filter="tokenInputMode === 'select' ? customFilter : undefined"
-                placeholder="Enter admin token"
-                type="text"
-                :disabled="loadingStates['import']"
-                class="token-input"
-                :searchable="tokenInputMode === 'select'"
-                :allow-input="tokenInputMode === 'select'"
-                @update:model-value="handleTokenSelect" />
-              <v-button small secondary icon="true" @click="toggleTokenInputMode">
-                <v-icon :name="tokenInputMode === 'select' ? 'edit' : 'list'" />
-              </v-button>
+              <div class="input-label">Admin Token:</div>
+              <div class="input-row">
+                <component
+                  :is="tokenInputMode === 'select' ? 'v-select' : 'v-input'"
+                  v-model="adminToken"
+                  :items="tokenInputMode === 'select' ? tokenHistory : undefined"
+                  :filter="tokenInputMode === 'select' ? customFilter : undefined"
+                  placeholder="Enter admin token"
+                  type="text"
+                  :disabled="loadingStates['import']"
+                  class="token-input"
+                  :searchable="tokenInputMode === 'select'"
+                  :allow-input="tokenInputMode === 'select'"
+                  @update:model-value="handleTokenSelect" />
+                <v-button small secondary icon="true" @click="toggleTokenInputMode">
+                  <v-icon :name="tokenInputMode === 'select' ? 'edit' : 'select'" />
+                </v-button>
+              </div>
             </div>
             <div class="input-group">
-              <v-input
-                v-model.number="importLimit"
-                type="number"
-                min="1"
-                placeholder="Max items to import (optional)"
-                :disabled="loadingStates['import']"
-                class="limit-input" />
-              <v-button small secondary icon="true" @click="importLimit = null">
-                <v-icon name="close" />
-              </v-button>
+              <div class="input-label">Import Limit:</div>
+              <div class="input-row">
+                <v-input
+                  v-model.number="importLimit"
+                  type="number"
+                  min="1"
+                  placeholder="Max items to import (optional)"
+                  :disabled="loadingStates['import']"
+                  class="limit-input" />
+                <v-button small secondary icon="true" @click="importLimit = null">
+                  <v-icon name="close" />
+                </v-button>
+              </div>
+            </div>
+            <div class="input-group">
+              <div class="input-label">Title Filter:</div>
+              <div class="input-row">
+                <v-input
+                  v-model="titleFilter"
+                  type="text"
+                  placeholder="Filter by title (optional)"
+                  :disabled="loadingStates['import']"
+                  class="title-filter-input" />
+                <v-button small secondary icon="true" @click="titleFilter = ''">
+                  <v-icon name="close" />
+                </v-button>
+              </div>
+              <div v-if="titleFilter" class="filter-info">
+                <v-notice type="info" class="filter-notice">
+                  Will import only items with titles containing "{{ titleFilter }}" (searches translations table)
+                </v-notice>
+              </div>
             </div>
           </div>
 
@@ -200,6 +228,7 @@
       selectedDomain: Ref<string>;
       adminToken: Ref<string>;
       importLimit: Ref<number | null>;
+      titleFilter: Ref<string>;
       domainHistory: Ref<string[]>;
       tokenHistory: Ref<string[]>;
       domainInputMode: Ref<InputMode>;
@@ -230,6 +259,7 @@
       const adminToken = ref<string>(localStorage.getItem('adminToken') || '');
       const savedLimit = localStorage.getItem('importLimit');
       const importLimit = ref<number | null>(savedLimit ? Number(savedLimit) || null : null);
+      const titleFilter = ref<string>(localStorage.getItem('titleFilter') || '');
       const domainHistory = ref<string[]>([]);
       const tokenHistory = ref<string[]>([]);
       const domainInputMode = ref<InputMode>((localStorage.getItem('domainInputMode') as InputMode) || 'select');
@@ -362,6 +392,15 @@
           localStorage.setItem('importLimit', String(newLimit));
         } else {
           localStorage.removeItem('importLimit');
+        }
+      });
+
+      // Persist titleFilter
+      watch(titleFilter, (newFilter: string): void => {
+        if (newFilter && newFilter.trim()) {
+          localStorage.setItem('titleFilter', newFilter);
+        } else {
+          localStorage.removeItem('titleFilter');
         }
       });
 
@@ -561,13 +600,14 @@
             console.warn('Preflight access test failed; proceeding to import', preflightError?.message);
           }
 
-          // Use the local import function with optional limit
+          // Use the local import function with optional limit and title filter
           const result: ImportResult = await importFromDirectus(
             selectedDomain.value,
             token,
             collectionName,
             api,
             importLimit.value ?? undefined,
+            titleFilter.value || undefined,
           );
 
           if (result.success) {
@@ -672,6 +712,7 @@
         selectedDomain,
         adminToken,
         importLimit,
+        titleFilter,
         domainHistory,
         tokenHistory,
         domainInputMode,
@@ -731,6 +772,13 @@ p {
 
 .input-group {
   display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: stretch;
+}
+
+.input-row {
+  display: flex;
   flex-direction: row;
   gap: 8px;
   align-items: stretch;
@@ -779,6 +827,28 @@ p {
   margin-bottom: 12px;
 }
 
+.title-filter-input {
+  flex: 1;
+  margin-bottom: 12px;
+}
+
+.filter-info {
+  margin-top: 8px;
+}
+
+.filter-notice {
+  font-size: 14px;
+}
+
+.input-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--foreground-subdued);
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
 .domain-selector {
   margin-bottom: 20px;
 }
@@ -808,7 +878,9 @@ p {
 
   .api-url-input .v-input,
   .domain-input,
-  .token-input {
+  .token-input,
+  .title-filter-input,
+  .limit-input {
     width: 100%;
   }
 

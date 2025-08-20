@@ -420,6 +420,7 @@ export async function importFromDirectus(
   collectionName: string,
   apiInstance?: any,
   limit?: number,
+  titleFilter?: string,
 ): Promise<{
   success: boolean;
   message: string;
@@ -544,10 +545,29 @@ export async function importFromDirectus(
     };
 
     // Fetch data from source server
-    logStep("fetch_data_start", { collectionName });
+    logStep("fetch_data_start", { collectionName, titleFilter });
     const fetchLimit = typeof limit === "number" && limit > 0 ? limit : -1;
+    
+    // Build query parameters
+    const queryParams: any = { limit: fetchLimit };
+    
+    if (titleFilter && titleFilter.trim()) {
+      // Filter only by translations title since the main collection doesn't have a title field
+      queryParams.filter = {
+        translations: {
+          title: {
+            _contains: titleFilter.trim()
+          }
+        }
+      };
+      logStep("title_filter_applied", { 
+        filter: titleFilter.trim(), 
+        approach: "translations.title only" 
+      });
+    }
+    
     const response = await sourceDirectus.request(
-      (readItems as any)(collectionName, { limit: fetchLimit }),
+      (readItems as any)(collectionName, queryParams),
     );
 
     // Ensure sourceItems is always an array
@@ -559,10 +579,11 @@ export async function importFromDirectus(
     });
 
     if (sourceItems.length === 0) {
-      logStep("collection_empty", { collectionName });
+      logStep("collection_empty", { collectionName, titleFilter });
+      const filterMessage = titleFilter && titleFilter.trim() ? ` with title filter '${titleFilter.trim()}'` : '';
       return {
         success: true,
-        message: `Collection '${collectionName}' is empty on the source server`,
+        message: `Collection '${collectionName}'${filterMessage} is empty on the source server`,
         importedItems: [],
         importLog,
       };
@@ -871,11 +892,13 @@ export async function importFromDirectus(
       successCount,
       errorCount,
       collectionName,
+      titleFilter,
     });
 
+    const filterMessage = titleFilter && titleFilter.trim() ? ` (filtered by title: '${titleFilter.trim()}')` : '';
     return {
       success: true,
-      message: `Successfully imported ${successCount} items from ${collectionName} (${errorCount} failed)`,
+      message: `Successfully imported ${successCount} items from ${collectionName}${filterMessage} (${errorCount} failed)`,
       importedItems,
       importLog,
     };
