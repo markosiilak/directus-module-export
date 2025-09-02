@@ -21,6 +21,8 @@ A Directus module extension for importing collection data from another Directus 
 - **Per-collection import 🧩**: Import items for a specific collection
 - **Import limit option ⏱️**: Optionally limit how many items to import per run
 - **File field support 🖼️**: Automatically copies single-file fields (by UUID or object) and reuses or uploads as needed
+- **ZIP export/import 📦**: Export a collection to a ZIP and re-import elsewhere, including `translations.*`
+- **Deep translations import 🌍**: Imports `translations` via deep writes with `deep=true`
 - **Folder auto-creation 📁**: Files are placed in a collection-named folder, created if missing
 
 ### At a glance
@@ -62,17 +64,21 @@ Notes:
   - Array/many-file relations are skipped (logged as `file_copy_skip`)
 - Reuse vs copy:
   - If a target item already has a file in a field and it matches the source by checksum (preferred) or file size/type, the existing file is reused
+  - ZIP import avoids uploading the same image when it already exists in Directus files
   - When reusing, the file may be patched to set `title` (from item title, if present) and move it into the target folder
 - Upload behavior:
   - Source file metadata fetched from `/files/{id}`; binary fetched from `/assets/{id}`
-  - Files are uploaded to the target via `/files` with `FormData` (`file`, optional `title`, `folder`, `filename_download`)
+  - Files are uploaded to the target via `/files` with `FormData` (`file`, optional `title`, `folder`)
   - Files are placed in a folder named after the collection; the folder is auto-created if missing
   - Title source: uses the item's `title` if available, otherwise first non-empty translation `title`
+  - ZIP import infers MIME type from filename to prevent "Binary Data" files
+  - ZIP import never uploads control files like `items.json` or any `.json` files
 - Caching:
   - Per-run cache avoids re-uploading the same source file across multiple items
   - Per-item cache prevents duplicate uploads within the same item
 - Update mapping (idempotent, optional):
   - If the `directus_sync_id_map` collection exists on the target, imports update existing items mapped by source `id`; otherwise new items are created
+  - ZIP import also maintains this mapping to avoid duplicates on re-import
 - Permissions required:
   - Source: read `/items/{collection}`, `/files/{id}`, `/assets/{id}`
   - Target: create/update `/items/{collection}`, `/files`, `/folders`, and (optionally) read/write `directus_sync_id_map`

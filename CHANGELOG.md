@@ -1,3 +1,16 @@
+## [2.0.1] - 2025-09-02
+
+### Fixed
+- ZIP import: infer MIME types for assets to avoid "Binary Data" files
+- ZIP import: skip uploading `items.json` and other `.json` files as assets
+- ZIP import: avoid duplicate items by using `directus_sync_id_map` mapping
+- ZIP import: avoid re-uploading images that already exist in Directus files
+
+### Added
+- ZIP export: include `translations.*` by default
+- ZIP import: import `translations` via deep writes (`deep=true`)
+- ZIP import: move/upload files into a collection-named folder
+
 ## [1.1.15] - 2025-01-15
 
 ### Added
