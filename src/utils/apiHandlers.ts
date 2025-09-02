@@ -1316,7 +1316,13 @@ export async function importCollectionFromZip(
     };
 
     if (filesFolder) {
-      const entries = Object.values(filesFolder.files).filter((f: any) => !f.dir);
+      const entries = Object.values(filesFolder.files)
+        .filter((f: any) => !f.dir)
+        // Never import JSON control files like items.json as assets
+        .filter((f: any) => {
+          const base = (f.name.split('/')?.pop() || '').toLowerCase();
+          return base !== 'items.json' && !base.endsWith('.json');
+        });
       for (const entry of entries as any[]) {
         const name: string = entry.name.split('/').pop() || '';
         // Expect pattern originalId_filename.ext (sanitized)
@@ -1482,6 +1488,9 @@ export async function importCollectionFromZip(
       if (!entry) return null;
       try {
         const name: string = entry.name.split('/').pop() || `${originalId}`;
+        // Safety: never upload JSON control files as Directus assets
+        const lower = name.toLowerCase();
+        if (lower === 'items.json' || lower.endsWith('.json')) return null;
         const blob = await entry.async('blob');
         const mime = inferMimeType(name);
         const filePart: Blob = mime && blob.type !== mime ? new Blob([blob], { type: mime }) : blob;
