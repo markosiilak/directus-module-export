@@ -1256,6 +1256,20 @@ export async function importCollectionFromZip(
     const parsed = JSON.parse(itemsJson || '{}');
     const items: any[] = Array.isArray(parsed.items) ? parsed.items : [];
 
+    // Prepare/ensure target folder for imported files
+    const targetFolderName = collectionName;
+    let targetFolderId: string | null = null;
+    try {
+      const findFolderRes = await api.get('/folders', { params: { limit: 1, filter: { name: { _eq: targetFolderName } } } });
+      const existingFolder = findFolderRes?.data?.data?.[0];
+      if (existingFolder?.id) {
+        targetFolderId = existingFolder.id;
+      } else {
+        const createFolderRes = await api.post('/folders', { name: targetFolderName, parent: null });
+        targetFolderId = createFolderRes?.data?.data?.id || null;
+      }
+    } catch {}
+
     // Collect files
     const filesFolder = zip.folder('files');
     const fileIdToNewId = new Map<string, string>();
@@ -1272,6 +1286,7 @@ export async function importCollectionFromZip(
         const blob = await entry.async('blob');
         const formData = new FormData();
         formData.append('file', blob, name);
+        if (targetFolderId) formData.append('folder', targetFolderId);
         // Optional: try to preserve title and filename_download
         try {
           const res = await api.post('/files', formData);
@@ -1414,7 +1429,13 @@ export async function importCollectionFromZip(
       if (fileIdToNewId.has(originalId)) return fileIdToNewId.get(originalId)!;
       try {
         const exists = await api.get(`/files/${originalId}`);
-        if (exists?.data?.data?.id) return originalId;
+        const meta = exists?.data?.data;
+        if (meta?.id) {
+          if (targetFolderId && meta.folder !== targetFolderId) {
+            try { await api.patch(`/files/${originalId}`, { folder: targetFolderId }); } catch {}
+          }
+          return originalId;
+        }
       } catch {}
       const entry = zipFileByOriginalId.get(originalId);
       if (!entry) return null;
@@ -1423,6 +1444,7 @@ export async function importCollectionFromZip(
         const blob = await entry.async('blob');
         const formData = new FormData();
         formData.append('file', blob, name);
+        if (targetFolderId) formData.append('folder', targetFolderId);
         const res = await api.post('/files', formData);
         const newId = res?.data?.data?.id;
         if (newId) {
