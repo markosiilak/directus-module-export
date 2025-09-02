@@ -1276,6 +1276,45 @@ export async function importCollectionFromZip(
     let filesUploaded = 0;
     const zipFileByOriginalId = new Map<string, any>();
 
+    // Minimal mime inference from filename extension for proper file typing in Directus
+    const inferMimeType = (filename: string): string | undefined => {
+      const ext = (filename.split('.')?.pop() || '').toLowerCase();
+      switch (ext) {
+        case 'jpg':
+        case 'jpeg':
+          return 'image/jpeg';
+        case 'png':
+          return 'image/png';
+        case 'gif':
+          return 'image/gif';
+        case 'webp':
+          return 'image/webp';
+        case 'svg':
+          return 'image/svg+xml';
+        case 'bmp':
+          return 'image/bmp';
+        case 'tif':
+        case 'tiff':
+          return 'image/tiff';
+        case 'mp4':
+          return 'video/mp4';
+        case 'mov':
+          return 'video/quicktime';
+        case 'webm':
+          return 'video/webm';
+        case 'mp3':
+          return 'audio/mpeg';
+        case 'wav':
+          return 'audio/wav';
+        case 'ogg':
+          return 'audio/ogg';
+        case 'pdf':
+          return 'application/pdf';
+        default:
+          return undefined;
+      }
+    };
+
     if (filesFolder) {
       const entries = Object.values(filesFolder.files).filter((f: any) => !f.dir);
       for (const entry of entries as any[]) {
@@ -1284,8 +1323,10 @@ export async function importCollectionFromZip(
         const originalId = String(name.split('_')[0]);
         zipFileByOriginalId.set(originalId, entry);
         const blob = await entry.async('blob');
+        const mime = inferMimeType(name);
+        const filePart: Blob = mime && blob.type !== mime ? new Blob([blob], { type: mime }) : blob;
         const formData = new FormData();
-        formData.append('file', blob, name);
+        formData.append('file', filePart, name);
         if (targetFolderId) formData.append('folder', targetFolderId);
         // Optional: try to preserve title and filename_download
         try {
@@ -1442,8 +1483,10 @@ export async function importCollectionFromZip(
       try {
         const name: string = entry.name.split('/').pop() || `${originalId}`;
         const blob = await entry.async('blob');
+        const mime = inferMimeType(name);
+        const filePart: Blob = mime && blob.type !== mime ? new Blob([blob], { type: mime }) : blob;
         const formData = new FormData();
-        formData.append('file', blob, name);
+        formData.append('file', filePart, name);
         if (targetFolderId) formData.append('folder', targetFolderId);
         const res = await api.post('/files', formData);
         const newId = res?.data?.data?.id;
