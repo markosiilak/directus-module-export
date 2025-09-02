@@ -1,6 +1,6 @@
 {
   "name": "directus-module-export",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Directus module for importing and exporting collection data between servers",
   "keywords": [
     "directus",
