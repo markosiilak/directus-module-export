@@ -77,9 +77,12 @@
                   <v-icon name="close" />
                 </v-button>
               </div>
-              <div v-if="titleFilter" class="filter-info">
+              <div v-if="titleFilter && !dismissedFilterInfo" class="filter-info">
                 <v-notice type="info" class="filter-notice">
                   Will import only items with titles containing "{{ titleFilter }}" (searches translations table)
+                  <v-button small secondary icon="true" @click="dismissedFilterInfo = true">
+                    <v-icon name="close" />
+                  </v-button>
                 </v-notice>
               </div>
             </div>
@@ -105,14 +108,14 @@
               Clear Token History
             </v-button>
           </div>
-          <v-notice v-if="adminToken" type="info" class="token-info">
-            Make sure your admin token has read/write permissions for the target collections
-          </v-notice>
         </div>
 
-        <div v-if="operationStatus" class="status-display" :class="operationStatus.type">
+        <div v-if="operationStatus && !dismissedStatus" class="status-display" :class="operationStatus.type">
           <v-notice :type="operationStatus.type">
             Status: {{ operationStatus.status }} - {{ operationStatus.message }}
+            <v-button small secondary icon="true" @click="dismissedStatus = true">
+              <v-icon name="close" />
+            </v-button>
           </v-notice>
         </div>
 
@@ -129,6 +132,19 @@
               <v-icon name="cloud_download" left />
               Import from another Directus
             </v-button>
+            <v-button
+              small
+              :loading="loadingStates[`export_${collection.collection}`] || loadingStates['export']"
+              @click="exportCollection(collection.collection)">
+              <v-icon name="download" left />
+              Export current content (ZIP)
+            </v-button>
+            <v-button small warning="true">
+              <label class="v-button v-button--small">
+                <input type="file" accept=".zip" style="display:none" @change="(e:any)=>{ const f=e.target.files?.[0]; if(f) importFromZip(collection.collection, f); e.target.value=''; }" />
+                <div>Import from ZIP</div>
+              </label>
+            </v-button>
           </div>
         </div>
       </div>
@@ -141,7 +157,7 @@
   import { useApi } from '@directus/extensions-sdk';
   import { defineComponent, onMounted, Ref, ref, watch } from 'vue';
 
-  import { importFromDirectus, validateDirectusToken } from './utils/apiHandlers';
+  import { downloadCollectionZip,importFromDirectus, validateDirectusToken } from './utils/apiHandlers';
 
   // Type definitions
   interface ApiError {
@@ -235,6 +251,9 @@
       tokenInputMode: Ref<InputMode>;
       needsReload: Ref<boolean>;
       operationStatus: Ref<OperationStatus | null>;
+      dismissedStatus: Ref<boolean>;
+      dismissedFilterInfo: Ref<boolean>;
+      showTokenInfo: Ref<boolean>;
       customFilter: (item: string, queryText: string) => boolean;
       handleDomainSelect: (value: string) => void;
       handleTokenSelect: (value: string) => void;
@@ -244,6 +263,8 @@
       toggleTokenInputMode: () => void;
       validateToken: () => Promise<boolean>;
       testCollections: () => Promise<void>;
+      exportCollection: (collectionName: string) => Promise<void>;
+      importFromZip: (collectionName: string, file: File) => Promise<void>;
       importFromLive: (collectionName: string) => Promise<void>;
       setLoading: (operation: string, collection: string, state: boolean) => void;
     } {
@@ -253,7 +274,8 @@
         import: false,
         push: false,
         token_validation: false,
-        test_collections: false
+        test_collections: false,
+        export: false
       });
       const selectedDomain = ref<string>(localStorage.getItem('selectedDomain') || '');
       const adminToken = ref<string>(localStorage.getItem('adminToken') || '');
@@ -266,6 +288,9 @@
       const tokenInputMode = ref<InputMode>((localStorage.getItem('tokenInputMode') as InputMode) || 'select');
       const needsReload = ref<boolean>(false);
       const operationStatus = ref<OperationStatus | null>(null);
+      const dismissedStatus = ref<boolean>(false);
+      const dismissedFilterInfo = ref<boolean>(false);
+      const showTokenInfo = ref<boolean>(true);
 
       // Load histories from localStorage on mount
       onMounted(async (): Promise<void> => {
@@ -395,13 +420,14 @@
         }
       });
 
-      // Persist titleFilter
+      // Persist titleFilter and reset its notice dismissal on change
       watch(titleFilter, (newFilter: string): void => {
         if (newFilter && newFilter.trim()) {
           localStorage.setItem('titleFilter', newFilter);
         } else {
           localStorage.removeItem('titleFilter');
         }
+        dismissedFilterInfo.value = false;
       });
 
       watch(needsReload, (value: boolean): void => {
@@ -476,6 +502,7 @@
         try {
           setLoading('token_validation', '', true);
           operationStatus.value = null;
+          dismissedStatus.value = false;
 
           const token = adminToken.value;
 
@@ -563,6 +590,63 @@
           };
         } finally {
           setLoading('test_collections', '', false);
+        }
+      };
+
+      const exportCollection = async (collectionName: string): Promise<void> => {
+        try {
+          setLoading('export', collectionName, true);
+          operationStatus.value = null;
+
+          // Always export all items without filters/limits
+          const res = await downloadCollectionZip(api, collectionName);
+
+          if (res.success) {
+            operationStatus.value = {
+              status: 200,
+              message: `Exported ${collectionName} (items: ${res.stats?.itemCount || 0}, files: ${res.stats?.fileCount || 0})`,
+              type: 'success'
+            };
+          } else {
+            operationStatus.value = {
+              status: 500,
+              message: res.message,
+              type: 'error'
+            };
+          }
+        } catch (error: any) {
+          console.error('Export error:', error);
+          operationStatus.value = {
+            status: 500,
+            message: error.message || 'Export failed',
+            type: 'error'
+          };
+        } finally {
+          setLoading('export', collectionName, false);
+        }
+      };
+
+      const importFromZip = async (collectionName: string, file: File): Promise<void> => {
+        try {
+          setLoading('import', collectionName, true);
+          operationStatus.value = null;
+          const { importCollectionFromZip } = await import('./utils/apiHandlers');
+          const res = await importCollectionFromZip(api, collectionName, file);
+          operationStatus.value = {
+            status: res.success ? 200 : 500,
+            message: res.message,
+            type: res.success ? 'success' : 'error'
+          };
+        } catch (error: any) {
+          console.error('ZIP import error:', error);
+          operationStatus.value = {
+            status: 500,
+            message: error.message || 'ZIP import failed',
+            type: 'error'
+          };
+        } finally {
+          setLoading('import', collectionName, false);
+          dismissedStatus.value = false;
         }
       };
 
@@ -719,6 +803,9 @@
         tokenInputMode,
         needsReload,
         operationStatus,
+        dismissedStatus,
+        dismissedFilterInfo,
+        showTokenInfo,
         customFilter,
         handleDomainSelect,
         handleTokenSelect,
@@ -728,6 +815,8 @@
         toggleTokenInputMode,
         validateToken,
         testCollections,
+        exportCollection,
+        importFromZip,
         importFromLive,
         setLoading
       };

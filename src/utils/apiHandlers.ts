@@ -1080,3 +1080,464 @@ export async function getAllCollectionsWithUseApi(
     };
   }
 }
+
+/**
+ * Export a collection from the current Directus instance into a ZIP file that
+ * contains items.json and a files/ directory with all referenced files.
+ */
+export async function exportCollectionAsZip(
+  api: any,
+  collectionName: string,
+  options?: {
+    limit?: number;
+    filter?: any;
+    fields?: string[];
+    includeDraft?: boolean;
+  },
+): Promise<{
+  success: boolean;
+  message: string;
+  blob?: Blob;
+  filename?: string;
+  error?: any;
+  stats?: { itemCount: number; fileCount: number };
+}> {
+  try {
+    const { default: JSZipLib } = await import('jszip');
+    const JSZip: any = JSZipLib || (await import('jszip')).default;
+    const params: any = { limit: options?.limit ?? -1 };
+    if (options?.filter) params.filter = options.filter;
+    // Ensure translations are included by default unless caller explicitly provided fields
+    if (options?.fields && options.fields.length > 0) {
+      params.fields = options.fields;
+      // If caller included fields but omitted translations, append them minimally
+      if (!options.fields.some((f) => f === 'translations' || f.startsWith('translations.'))) {
+        params.fields = [...options.fields, 'translations.*'];
+      }
+    } else {
+      params.fields = ['*', 'translations.*'];
+    }
+    if (options?.includeDraft === false) params.filter = { ...(params.filter || {}), status: { _neq: "draft" } };
+
+    const itemsRes = await api.get(`/items/${collectionName}`, { params });
+    const items: any[] = itemsRes?.data?.data || [];
+
+    const zip = new JSZip();
+    const filesFolder = zip.folder("files");
+    const addedFileIds = new Set<string>();
+
+    // Helper: safe filename
+    const toSafe = (name: string): string => name.replace(/[^a-zA-Z0-9._-]+/g, "_");
+
+    // Probe if an id is an existing file in current instance
+    const isExistingFile = async (id: string): Promise<null | { meta: any; filename: string }> => {
+      try {
+        const metaRes = await api.get(`/files/${id}`);
+        const meta = metaRes?.data?.data;
+        if (!meta?.id) return null;
+        const filename = meta.filename_download || meta.filename || `${id}`;
+        return { meta, filename };
+      } catch {
+        return null;
+      }
+    };
+
+    // Collect candidate file ids from value
+    const extractIds = (value: any): string[] => {
+      if (!value) return [];
+      if (typeof value === "string") return [value];
+      if (Array.isArray(value)) {
+        const ids: string[] = [];
+        for (const v of value) ids.push(...extractIds(v));
+        return ids;
+      }
+      if (typeof value === "object" && value.id && typeof value.id === "string") return [value.id];
+      return [];
+    };
+
+    // For each item, detect file fields and add binaries to zip (using authenticated API to avoid 403s)
+    for (const item of items) {
+      for (const [key, val] of Object.entries(item)) {
+        const candidateIds = extractIds(val);
+        for (const candidateId of candidateIds) {
+          if (addedFileIds.has(candidateId)) continue;
+          const probe = await isExistingFile(candidateId);
+          if (!probe) continue;
+          try {
+            const binRes = await api.get(`/assets/${candidateId}`, { responseType: 'blob' });
+            const blob: Blob = binRes?.data as Blob;
+            const safeName = toSafe(`${candidateId}_${probe.filename}`);
+            filesFolder?.file(safeName, blob);
+            addedFileIds.add(candidateId);
+          } catch (fileErr: any) {
+            console.error("Failed to fetch file asset:", candidateId, fileErr?.message);
+          }
+        }
+      }
+    }
+
+    // items.json contains raw items as-is, keeping file relations by id
+    zip.file("items.json", JSON.stringify({ collection: collectionName, items }, null, 2));
+
+    const blob = await zip.generateAsync({ type: "blob" });
+    const filename = `${collectionName}-export-${new Date().toISOString().replace(/[:.]/g, "-")}.zip`;
+
+    return {
+      success: true,
+      message: "Export ZIP generated",
+      blob,
+      filename,
+      stats: { itemCount: items.length, fileCount: addedFileIds.size },
+    };
+  } catch (error: any) {
+    return {
+      success: false,
+      message: `Export failed: ${error.message}`,
+      error: {
+        message: error.message,
+        status: error.response?.status,
+        details: error.response?.data,
+      },
+    };
+  }
+}
+
+/**
+ * Convenience: generate and trigger download of the ZIP in browser
+ */
+export async function downloadCollectionZip(
+  api: any,
+  collectionName: string,
+  options?: { limit?: number; filter?: any; fields?: string[]; includeDraft?: boolean },
+): Promise<{
+  success: boolean;
+  message: string;
+  stats?: { itemCount: number; fileCount: number };
+  error?: any;
+}> {
+  const res = await exportCollectionAsZip(api, collectionName, options);
+  if (res.success && res.blob && res.filename) {
+    try {
+      const mod = await import('file-saver');
+      const saveAs = (mod as any).saveAs || (mod as any).default || (mod as any);
+      saveAs(res.blob, res.filename);
+      return { success: true, message: res.message, stats: res.stats };
+    } catch (err: any) {
+      return { success: false, message: `Download failed: ${err.message}`, error: err };
+    }
+  }
+  return { success: false, message: res.message, error: res.error };
+}
+
+/**
+ * Imports a collection from a previously exported ZIP (items.json + files/*)
+ */
+export async function importCollectionFromZip(
+  api: any,
+  collectionName: string,
+  zipFile: File | Blob,
+): Promise<{
+  success: boolean;
+  message: string;
+  stats?: { created: number; updated: number; failed: number; filesUploaded: number };
+  error?: any;
+}> {
+  try {
+    const { default: JSZipLib } = await import('jszip');
+    const JSZip: any = JSZipLib || (await import('jszip')).default;
+    const zip = await JSZip.loadAsync(zipFile);
+
+    // Read items.json
+    const itemsEntry = zip.file('items.json');
+    if (!itemsEntry) {
+      return { success: false, message: 'items.json not found in ZIP' };
+    }
+    const itemsJson = await itemsEntry.async('string');
+    const parsed = JSON.parse(itemsJson || '{}');
+    const items: any[] = Array.isArray(parsed.items) ? parsed.items : [];
+
+    // Collect files
+    const filesFolder = zip.folder('files');
+    const fileIdToNewId = new Map<string, string>();
+    let filesUploaded = 0;
+    const zipFileByOriginalId = new Map<string, any>();
+
+    if (filesFolder) {
+      const entries = Object.values(filesFolder.files).filter((f: any) => !f.dir);
+      for (const entry of entries as any[]) {
+        const name: string = entry.name.split('/').pop() || '';
+        // Expect pattern originalId_filename.ext (sanitized)
+        const originalId = String(name.split('_')[0]);
+        zipFileByOriginalId.set(originalId, entry);
+        const blob = await entry.async('blob');
+        const formData = new FormData();
+        formData.append('file', blob, name);
+        // Optional: try to preserve title and filename_download
+        try {
+          const res = await api.post('/files', formData);
+          const newId = res?.data?.data?.id;
+          if (newId) {
+            fileIdToNewId.set(originalId, String(newId));
+            filesUploaded++;
+          }
+        } catch (e: any) {
+          console.error('File upload failed for', name, e?.message);
+        }
+      }
+    }
+
+    // Helper to remap file ids inside an arbitrary value
+    const remapFileIds = (value: any): any => {
+      if (!value) return value;
+      if (typeof value === 'string') {
+        return fileIdToNewId.get(value) || value;
+      }
+      if (Array.isArray(value)) {
+        return value.map((v) => remapFileIds(v));
+      }
+      if (typeof value === 'object') {
+        if (value.id && typeof value.id === 'string' && fileIdToNewId.has(value.id)) {
+          return { ...value, id: fileIdToNewId.get(value.id) };
+        }
+        const out: any = Array.isArray(value) ? [] : { ...value };
+        for (const [k, v] of Object.entries(value)) {
+          (out as any)[k] = remapFileIds(v);
+        }
+        return out;
+      }
+      return value;
+    };
+
+    let created = 0;
+    let updated = 0;
+    let failed = 0;
+    let firstErrorMessage: string | null = null;
+
+    // Fetch field definitions for sanitization
+    const fieldsRes = await api.get(`/fields/${collectionName}`, { params: { limit: -1 } });
+    const fields = (fieldsRes?.data?.data || fieldsRes?.data || []) as Array<any>;
+    const fieldByName = new Map<string, any>();
+    for (const f of fields) fieldByName.set(f.field, f);
+    const allowedFieldNames = new Set<string>(fields.map((f: any) => f.field));
+    const hasStatus = allowedFieldNames.has('status');
+
+    const isSimpleValue = (v: any): boolean => {
+      if (v === null) return true;
+      const t = typeof v;
+      return t === 'string' || t === 'number' || t === 'boolean';
+    };
+
+    const toIdIfObject = (v: any): any => {
+      if (!v) return v;
+      if (typeof v === 'object' && !Array.isArray(v) && typeof v.id === 'string') return v.id;
+      return v;
+    };
+
+    const sanitizePayload = (raw: any): Record<string, any> => {
+      const result: Record<string, any> = {};
+      for (const key of Object.keys(raw || {})) {
+        if (!allowedFieldNames.has(key)) continue;
+        const value = raw[key];
+        const fieldMeta = fieldByName.get(key) || {};
+        const specials: string[] = Array.isArray(fieldMeta?.meta?.special) ? fieldMeta.meta.special : [];
+        const related = fieldMeta?.meta?.related_collection || fieldMeta?.related_collection;
+        const isFileField = specials.includes('file') || related === 'directus_files';
+        // Keep only primitive values or single file references (object with id or string)
+        if (isSimpleValue(value)) {
+          result[key] = value;
+          continue;
+        }
+        if (typeof value === 'object' && !Array.isArray(value)) {
+          const idOrVal = toIdIfObject(value);
+          if (isFileField) {
+            // Force to string id for file fields, drop otherwise
+            const candidate = typeof idOrVal === 'string' ? idOrVal : undefined;
+            if (candidate) result[key] = candidate;
+          } else if (isSimpleValue(idOrVal) || typeof idOrVal === 'string') {
+            result[key] = idOrVal;
+          }
+          continue;
+        }
+        // Skip arrays and complex objects; relations should be handled separately later
+      }
+      if (hasStatus && (result.status === undefined || result.status === null || result.status === '')) {
+        result.status = 'published';
+      }
+      return result;
+    };
+
+    const fillRequiredDefaults = async (payload: Record<string, any>): Promise<Record<string, any>> => {
+      const out: Record<string, any> = { ...payload };
+      for (const f of fields) {
+        const name = f.field;
+        const isRequired = Boolean(f?.meta?.required || f?.schema?.is_nullable === false);
+        if (!isRequired) continue;
+        const hasValue = out[name] !== undefined && out[name] !== null && out[name] !== '';
+        if (hasValue) continue;
+        const defVal = f?.schema?.default_value ?? f?.meta?.default_value;
+        if (defVal !== undefined) {
+          out[name] = defVal;
+          continue;
+        }
+        const related = f?.meta?.related_collection || f?.related_collection;
+        const specials: string[] = Array.isArray(f?.meta?.special) ? f.meta.special : [];
+        const isO2OorO2M = related && !Array.isArray(out[name]) && !specials.includes('m2m');
+        if (isO2OorO2M && !out[name]) {
+          try {
+            const relRes = await api.get(`/items/${related}`, { params: { fields: ['id'], limit: 1 } });
+            const first = relRes?.data?.data?.[0];
+            if (first?.id) out[name] = String(first.id);
+          } catch {}
+        }
+      }
+      return out;
+    };
+
+    const tryFindExistingId = async (payload: any): Promise<string | null> => {
+      // Heuristics: url, path, slug, title (as last resort)
+      const candidates: Array<[string, any]> = [];
+      if (typeof payload.url === 'string' && payload.url.trim()) candidates.push(['url', payload.url.trim()]);
+      if (typeof payload.path === 'string' && payload.path.trim()) candidates.push(['path', payload.path.trim()]);
+      if (typeof payload.slug === 'string' && payload.slug.trim()) candidates.push(['slug', payload.slug.trim()]);
+      if (typeof payload.title === 'string' && payload.title.trim()) candidates.push(['title', payload.title.trim()]);
+      for (const [field, value] of candidates) {
+        try {
+          const res = await api.get(`/items/${collectionName}`, { params: { limit: 1, filter: { [field]: { _eq: value } }, fields: ['id'] } });
+          const hit = res?.data?.data?.[0];
+          if (hit?.id) return String(hit.id);
+        } catch {}
+      }
+      return null;
+    };
+
+    const ensureFileAvailable = async (originalId: string): Promise<string | null> => {
+      if (fileIdToNewId.has(originalId)) return fileIdToNewId.get(originalId)!;
+      try {
+        const exists = await api.get(`/files/${originalId}`);
+        if (exists?.data?.data?.id) return originalId;
+      } catch {}
+      const entry = zipFileByOriginalId.get(originalId);
+      if (!entry) return null;
+      try {
+        const name: string = entry.name.split('/').pop() || `${originalId}`;
+        const blob = await entry.async('blob');
+        const formData = new FormData();
+        formData.append('file', blob, name);
+        const res = await api.post('/files', formData);
+        const newId = res?.data?.data?.id;
+        if (newId) {
+          fileIdToNewId.set(originalId, String(newId));
+          return String(newId);
+        }
+      } catch {}
+      return null;
+    };
+
+    // Prepare translations from raw item for deep write
+    const prepareTranslations = (raw: any): any[] | undefined => {
+      const trs = raw && Array.isArray(raw.translations) ? raw.translations : undefined;
+      if (!trs || trs.length === 0) return undefined;
+      const cleaned = trs
+        .map((t: any) => {
+          if (!t) return null;
+          const { id: _ignored, ...rest } = t;
+          // Normalize title/body possibly being objects with value
+          const normalizeRich = (v: any) =>
+            typeof v === 'object' && v !== null && typeof v.value === 'string' ? v.value : v;
+          const out: any = { ...rest };
+          if (out.title !== undefined) out.title = normalizeRich(out.title);
+          if (out.body !== undefined) out.body = normalizeRich(out.body);
+          return out;
+        })
+        .filter(Boolean);
+      return cleaned.length > 0 ? cleaned : undefined;
+    };
+
+    for (const raw of items) {
+      let currentPayload: Record<string, any> | undefined = undefined;
+      try {
+        const { id, date_created, date_updated, user_created, user_updated, ...rest } = raw || {};
+        // Remap file ids to newly uploaded ids
+        const remapped = remapFileIds(rest);
+        let payload = sanitizePayload(remapped);
+        payload = await fillRequiredDefaults(payload);
+        currentPayload = payload;
+        const deep: any = {};
+        const deepTranslations = prepareTranslations(remapped);
+        if (deepTranslations) {
+          deep.translations = deepTranslations;
+        }
+
+        // Ensure file fields actually exist, fallback to uploading from ZIP entry if missing
+        for (const [fieldName, fieldMeta] of fieldByName.entries()) {
+          const specials: string[] = Array.isArray(fieldMeta?.meta?.special) ? fieldMeta.meta.special : [];
+          const related = fieldMeta?.meta?.related_collection || fieldMeta?.related_collection;
+          const isFileField = specials.includes('file') || related === 'directus_files';
+          if (!isFileField) continue;
+          const current = payload[fieldName];
+          if (typeof current === 'string') {
+            const ensured = await ensureFileAvailable(current);
+            payload[fieldName] = ensured || null;
+          } else if (current && typeof current === 'object' && typeof current.id === 'string') {
+            const ensured = await ensureFileAvailable(current.id);
+            payload[fieldName] = ensured || null;
+          } else if (current != null) {
+            // Coerce any non-string leftover to null for file fields
+            payload[fieldName] = null;
+          }
+        }
+
+        // Upsert: try find existing by heuristics
+        const existingId = await tryFindExistingId(payload);
+        if (existingId) {
+          try {
+            // On update, send deep translations if present; Directus will upsert by primary key of junction
+            await api.patch(`/items/${collectionName}/${existingId}`, deep.translations ? { ...payload, deep } : payload);
+            updated++;
+            continue;
+          } catch (e: any) {
+            // fallthrough to create
+          }
+        }
+
+        const createRes = await api.post(`/items/${collectionName}`, deep.translations ? { ...payload, deep } : payload);
+        if (createRes?.data?.data?.id) {
+          created++;
+        } else {
+          failed++;
+          if (!firstErrorMessage) firstErrorMessage = 'Unknown validation error';
+        }
+      } catch (errCreate: any) {
+        failed++;
+        try {
+          const backend = errCreate?.response?.data;
+          if (!firstErrorMessage) {
+            const apiMsg = backend?.errors?.[0]?.message || backend?.errors?.[0]?.extensions?.code || backend?.message;
+            firstErrorMessage = apiMsg ? String(apiMsg) : (typeof backend === 'string' ? backend : errCreate?.message);
+          }
+          console.error('Item import failed', {
+            collection: collectionName,
+            error: backend || errCreate?.message,
+            payload: currentPayload,
+          });
+        } catch {}
+      }
+    }
+
+    return {
+      success: true,
+      message: `Imported ${created + updated} items (created: ${created}, updated: ${updated}, failed: ${failed}), files uploaded: ${filesUploaded}` + (failed > 0 && firstErrorMessage ? ` — first error: ${firstErrorMessage}` : ''),
+      stats: { created, updated, failed, filesUploaded },
+    };
+  } catch (error: any) {
+    return {
+      success: false,
+      message: `ZIP import failed: ${error.message}`,
+      error: {
+        message: error.message,
+        status: error.response?.status,
+        details: error.response?.data,
+      },
+    };
+  }
+}
