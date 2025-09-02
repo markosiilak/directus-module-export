@@ -1462,10 +1462,10 @@ export async function importCollectionFromZip(
         let payload = sanitizePayload(remapped);
         payload = await fillRequiredDefaults(payload);
         currentPayload = payload;
-        const deep: any = {};
         const deepTranslations = prepareTranslations(remapped);
         if (deepTranslations) {
-          deep.translations = deepTranslations;
+          // Place translations on payload; use deep=true query param for nested write
+          (payload as any).translations = deepTranslations;
         }
 
         // Ensure file fields actually exist, fallback to uploading from ZIP entry if missing
@@ -1491,8 +1491,8 @@ export async function importCollectionFromZip(
         const existingId = await tryFindExistingId(payload);
         if (existingId) {
           try {
-            // On update, send deep translations if present; Directus will upsert by primary key of junction
-            await api.patch(`/items/${collectionName}/${existingId}`, deep.translations ? { ...payload, deep } : payload);
+            // On update, send deep=true to allow nested translations
+            await api.patch(`/items/${collectionName}/${existingId}`, payload, { params: { deep: true } });
             updated++;
             continue;
           } catch (e: any) {
@@ -1500,7 +1500,7 @@ export async function importCollectionFromZip(
           }
         }
 
-        const createRes = await api.post(`/items/${collectionName}`, deep.translations ? { ...payload, deep } : payload);
+        const createRes = await api.post(`/items/${collectionName}`, payload, { params: { deep: true } });
         if (createRes?.data?.data?.id) {
           created++;
         } else {
