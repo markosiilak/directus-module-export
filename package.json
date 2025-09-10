@@ -1,6 +1,6 @@
 {
   "name": "directus-module-export",
-  "version": "2.0.2",
+  "version": "1.1.15",
   "description": "Directus module for importing and exporting collection data between servers",
   "keywords": [
     "directus",
@@ -56,5 +56,7 @@
     "@directus/extensions-sdk": "^15.0.0",
     "typescript": "^5.0.0"
   },
-  "dependencies": {}
+  "dependencies": {
+    "jszip": "^3.10.1"
+  }
 }
