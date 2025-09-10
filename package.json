@@ -54,6 +54,7 @@
   },
   "devDependencies": {
     "@directus/extensions-sdk": "^15.0.0",
+    "@types/file-saver": "^2.0.7",
     "typescript": "^5.0.0"
   },
   "dependencies": {

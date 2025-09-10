@@ -1079,6 +1079,7 @@ export async function getAllCollectionsWithUseApi(
 /**
  * Export a collection from the current Directus instance into a ZIP file that
  * contains items.json and a files/ directory with all referenced files.
+ * Now includes full content of related collections instead of just IDs.
  */
 export async function exportCollectionAsZip(
   api: any,
@@ -1088,6 +1089,8 @@ export async function exportCollectionAsZip(
     filter?: any;
     fields?: string[];
     includeDraft?: boolean;
+    includeRelatedCollections?: boolean;
+    relatedCollectionDepth?: number;
   },
 ): Promise<{
   success: boolean;
@@ -1095,7 +1098,7 @@ export async function exportCollectionAsZip(
   blob?: Blob;
   filename?: string;
   error?: any;
-  stats?: { itemCount: number; fileCount: number };
+  stats?: { itemCount: number; fileCount: number; relatedCollections?: string[] };
 }> {
   try {
     const { default: JSZipLib } = await import('jszip');
@@ -1116,6 +1119,46 @@ export async function exportCollectionAsZip(
 
     const itemsRes = await api.get(`/items/${collectionName}`, { params });
     const items: any[] = itemsRes?.data?.data || [];
+
+    // Get field definitions to identify related collections
+    const fieldsRes = await api.get(`/fields/${collectionName}`);
+    const fields = fieldsRes?.data?.data || [];
+    
+    // Identify related collections from field definitions
+    const relatedCollections = new Set<string>();
+    const fieldRelations = new Map<string, { collection: string; type: 'o2m' | 'm2o' | 'm2a' | 'm2m' }>();
+    
+    for (const field of fields) {
+      if (field.meta?.related_collection && field.meta.related_collection !== 'directus_files') {
+        relatedCollections.add(field.meta.related_collection);
+        fieldRelations.set(field.field, {
+          collection: field.meta.related_collection,
+          type: field.meta.special?.[0] || 'm2o'
+        });
+      }
+    }
+
+    // Fetch related collection data if enabled
+    const relatedData = new Map<string, any[]>();
+    const relatedCollectionsList: string[] = [];
+    
+    if (options?.includeRelatedCollections !== false && relatedCollections.size > 0) {
+      console.log('Fetching related collections:', Array.from(relatedCollections));
+      
+      for (const relatedCollection of relatedCollections) {
+        try {
+          const relatedRes = await api.get(`/items/${relatedCollection}`, { 
+            params: { limit: -1, fields: ['*', 'translations.*'] }
+          });
+          const relatedItems = relatedRes?.data?.data || [];
+          relatedData.set(relatedCollection, relatedItems);
+          relatedCollectionsList.push(relatedCollection);
+          console.log(`Fetched ${relatedItems.length} items from ${relatedCollection}`);
+        } catch (error: any) {
+          console.warn(`Failed to fetch related collection ${relatedCollection}:`, error.message);
+        }
+      }
+    }
 
     const zip = new JSZip();
     const filesFolder = zip.folder("files");
@@ -1171,8 +1214,26 @@ export async function exportCollectionAsZip(
       }
     }
 
-    // items.json contains raw items as-is, keeping file relations by id
-    zip.file("items.json", JSON.stringify({ collection: collectionName, items }, null, 2));
+    // Create enhanced items.json with related collection data
+    const exportData: any = {
+      collection: collectionName,
+      items: items,
+      exportedAt: new Date().toISOString(),
+      options: {
+        includeRelatedCollections: options?.includeRelatedCollections !== false,
+        relatedCollectionDepth: options?.relatedCollectionDepth || 1
+      }
+    };
+
+    // Add related collections data if available
+    if (relatedData.size > 0) {
+      exportData.relatedCollections = {};
+      for (const [collectionName, items] of relatedData.entries()) {
+        exportData.relatedCollections[collectionName] = items;
+      }
+    }
+
+    zip.file("items.json", JSON.stringify(exportData, null, 2));
 
     const blob = await zip.generateAsync({ type: "blob" });
     const filename = `${collectionName}-export-${new Date().toISOString().replace(/[:.]/g, "-")}.zip`;
@@ -1182,7 +1243,11 @@ export async function exportCollectionAsZip(
       message: "Export ZIP generated",
       blob,
       filename,
-      stats: { itemCount: items.length, fileCount: addedFileIds.size },
+      stats: { 
+        itemCount: items.length, 
+        fileCount: addedFileIds.size,
+        relatedCollections: relatedCollectionsList
+      },
     };
   } catch (error: any) {
     return {
@@ -1203,11 +1268,18 @@ export async function exportCollectionAsZip(
 export async function downloadCollectionZip(
   api: any,
   collectionName: string,
-  options?: { limit?: number; filter?: any; fields?: string[]; includeDraft?: boolean },
+  options?: { 
+    limit?: number; 
+    filter?: any; 
+    fields?: string[]; 
+    includeDraft?: boolean;
+    includeRelatedCollections?: boolean;
+    relatedCollectionDepth?: number;
+  },
 ): Promise<{
   success: boolean;
   message: string;
-  stats?: { itemCount: number; fileCount: number };
+  stats?: { itemCount: number; fileCount: number; relatedCollections?: string[] };
   error?: any;
 }> {
   const res = await exportCollectionAsZip(api, collectionName, options);
