@@ -86,27 +86,6 @@
                 </v-notice>
               </div>
             </div>
-            <div class="input-group">
-              <div class="input-label">Export Options:</div>
-              <div class="checkbox-group">
-                <v-checkbox
-                  v-model="includeRelatedCollections"
-                  label="Include related collections content"
-                  :disabled="loadingStates['export']"
-                  class="export-option" />
-                <div v-if="includeRelatedCollections" class="depth-control">
-                  <v-input
-                    v-model.number="relatedCollectionDepth"
-                    type="number"
-                    min="1"
-                    max="3"
-                    placeholder="Depth (1-3)"
-                    :disabled="loadingStates['export']"
-                    class="depth-input" />
-                  <span class="depth-label">Depth</span>
-                </div>
-              </div>
-            </div>
           </div>
 
           <v-button small secondary :loading="loadingStates['token_validation']" @click="validateToken">
@@ -265,8 +244,7 @@
       adminToken: Ref<string>;
       importLimit: Ref<number | null>;
       titleFilter: Ref<string>;
-      includeRelatedCollections: Ref<boolean>;
-      relatedCollectionDepth: Ref<number>;
+      // depth removed
       domainHistory: Ref<string[]>;
       tokenHistory: Ref<string[]>;
       domainInputMode: Ref<InputMode>;
@@ -305,8 +283,7 @@
       const savedLimit = localStorage.getItem('importLimit');
       const importLimit = ref<number | null>(savedLimit ? Number(savedLimit) || null : null);
       const titleFilter = ref<string>(localStorage.getItem('titleFilter') || '');
-      const includeRelatedCollections = ref<boolean>(localStorage.getItem('includeRelatedCollections') === 'true');
-      const relatedCollectionDepth = ref<number>(Number(localStorage.getItem('relatedCollectionDepth')) || 1);
+      // depth removed; exporter uses default
       const domainHistory = ref<string[]>([]);
       const tokenHistory = ref<string[]>([]);
       const domainInputMode = ref<InputMode>((localStorage.getItem('domainInputMode') as InputMode) || 'select');
@@ -457,15 +434,7 @@
       });
 
       // Persist export options
-      watch(includeRelatedCollections, (newValue: boolean): void => {
-        localStorage.setItem('includeRelatedCollections', String(newValue));
-      });
-
-      watch(relatedCollectionDepth, (newValue: number): void => {
-        if (newValue && newValue >= 1 && newValue <= 3) {
-          localStorage.setItem('relatedCollectionDepth', String(newValue));
-        }
-      });
+      // depth watch removed
 
       watch(needsReload, (value: boolean): void => {
         if (value) {
@@ -651,13 +620,10 @@
           operationStatus.value = null;
 
           // Export with current options
-          const res = await downloadCollectionZip(api, collectionName, {
-            includeRelatedCollections: includeRelatedCollections.value,
-            relatedCollectionDepth: relatedCollectionDepth.value
-          });
+          const res = await downloadCollectionZip(api, collectionName, {});
 
           if (res.success) {
-            const relatedInfo = res.stats?.relatedCollections && res.stats.relatedCollections.length > 0 
+            const relatedInfo = res.stats?.relatedCollections && res.stats.relatedCollections.length > 0
               ? `, related collections: ${res.stats.relatedCollections.join(', ')}`
               : '';
             operationStatus.value = {
@@ -855,8 +821,6 @@
         adminToken,
         importLimit,
         titleFilter,
-        includeRelatedCollections,
-        relatedCollectionDepth,
         domainHistory,
         tokenHistory,
         domainInputMode,

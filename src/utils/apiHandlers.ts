@@ -1089,7 +1089,7 @@ export async function exportCollectionAsZip(
     filter?: any;
     fields?: string[];
     includeDraft?: boolean;
-    includeRelatedCollections?: boolean;
+    // always include related collections; option removed from UI
     relatedCollectionDepth?: number;
   },
 ): Promise<{
@@ -1105,49 +1105,161 @@ export async function exportCollectionAsZip(
     const JSZip: any = JSZipLib || (await import('jszip')).default;
     const params: any = { limit: options?.limit ?? -1 };
     if (options?.filter) params.filter = options.filter;
-    // Ensure translations are included by default unless caller explicitly provided fields
+
+    // We will expand relational fields (o2m/m2m/m2a/m2o) to objects by default
+    // Build base fields list first
+    let requestedFields: string[] | undefined = undefined;
     if (options?.fields && options.fields.length > 0) {
-      params.fields = options.fields;
-      // If caller included fields but omitted translations, append them minimally
-      if (!options.fields.some((f) => f === 'translations' || f.startsWith('translations.'))) {
-        params.fields = [...options.fields, 'translations.*'];
+      // Map any bare '*' to '*.*' to request one-level deep expansion by default
+      requestedFields = options.fields.map((f) => (f === '*' ? '*.*' : f));
+      if (!requestedFields.some((f) => f === 'translations' || f.startsWith('translations.'))) {
+        requestedFields.push('translations.*');
       }
     } else {
-      params.fields = ['*', 'translations.*'];
+      // Default: request one-level deep expansion on all fields
+      requestedFields = ['*.*', 'translations.*'];
     }
     if (options?.includeDraft === false) params.filter = { ...(params.filter || {}), status: { _neq: "draft" } };
+
+    // Build nested expansion paths up to configured depth
+    try {
+      const expansionDepth = Math.max(1, Number(options?.relatedCollectionDepth || 1));
+
+      const getFields = async (col: string): Promise<any[]> => {
+        try {
+          const res = await api.get(`/fields/${col}`);
+          return res?.data?.data || [];
+        } catch { return []; }
+      };
+
+      type QueueEntry = { col: string; prefix: string; depth: number };
+      const queue: QueueEntry[] = [{ col: collectionName, prefix: '', depth: 0 }];
+      const seenPaths = new Set<string>();
+      params.deep = params.deep || {};
+
+      while (queue.length > 0) {
+        const { col, prefix, depth } = queue.shift()!;
+        if (depth >= expansionDepth) continue;
+        const fields = await getFields(col);
+        for (const f of fields) {
+          const relCol = f?.meta?.related_collection || f?.related_collection;
+          const specials: string[] = Array.isArray(f?.meta?.special) ? f.meta.special : [];
+          if (!relCol || relCol === 'directus_files') continue;
+          const path = prefix ? `${prefix}.${f.field}` : f.field;
+          if (!seenPaths.has(path)) {
+            seenPaths.add(path);
+            // Request object expansion + translations
+            if (!requestedFields!.includes(`${path}.*`)) requestedFields!.push(`${path}.*`);
+            if (!requestedFields!.includes(`${path}.translations.*`)) requestedFields!.push(`${path}.translations.*`);
+            // For junction rows, also try to reach nested related item
+            if (!requestedFields!.includes(`${path}.*.*`)) requestedFields!.push(`${path}.*.*`);
+            if (!requestedFields!.includes(`${path}.*.translations.*`)) requestedFields!.push(`${path}.*.translations.*`);
+            // Ensure arrays (o2m, m2m) return all rows
+            const isArrayRel = specials.includes('o2m') || specials.includes('m2m');
+            if (isArrayRel) {
+              // Build deep limit object for this path
+              let cursor = params.deep as any;
+              const parts = path.split('.');
+              for (const p of parts) {
+                cursor[p] = cursor[p] || {};
+                cursor = cursor[p];
+              }
+              cursor._limit = -1;
+              // Also try wildcard for nested junction children
+              cursor['*'] = cursor['*'] || {};
+              cursor['*']._limit = -1;
+            }
+            // Enqueue next level
+            queue.push({ col: relCol, prefix: path, depth: depth + 1 });
+          }
+        }
+      }
+    } catch {}
+
+    params.fields = requestedFields;
 
     const itemsRes = await api.get(`/items/${collectionName}`, { params });
     const items: any[] = itemsRes?.data?.data || [];
 
-    // Get field definitions to identify related collections
-    const fieldsRes = await api.get(`/fields/${collectionName}`);
-    const fields = fieldsRes?.data?.data || [];
-    
-    // Identify related collections from field definitions
-    const relatedCollections = new Set<string>();
-    const fieldRelations = new Map<string, { collection: string; type: 'o2m' | 'm2o' | 'm2a' | 'm2m' }>();
-    
-    for (const field of fields) {
-      if (field.meta?.related_collection && field.meta.related_collection !== 'directus_files') {
-        relatedCollections.add(field.meta.related_collection);
-        fieldRelations.set(field.field, {
-          collection: field.meta.related_collection,
-          type: field.meta.special?.[0] || 'm2o'
-        });
+    // Discover all related collections recursively (schema-based)
+    const getFieldDefs = async (col: string): Promise<any[]> => {
+      try {
+        const res = await api.get(`/fields/${col}`);
+        return res?.data?.data || [];
+      } catch {
+        return [];
       }
-    }
+    };
+
+    const getRelations = async (col: string): Promise<any[]> => {
+      try {
+        // Include both directions where this collection is involved
+        const [a, b] = await Promise.all([
+          api.get(`/relations`, { params: { filter: { collection: { _eq: col } }, limit: -1 } }),
+          api.get(`/relations`, { params: { filter: { related_collection: { _eq: col } }, limit: -1 } }),
+        ]);
+        const ar = a?.data?.data || [];
+        const br = b?.data?.data || [];
+        return [...ar, ...br];
+      } catch {
+        return [];
+      }
+    };
+
+    const resolveRelatedCollections = async (start: string, maxDepth: number): Promise<Set<string>> => {
+      const visited = new Set<string>();
+      const queue: Array<{ col: string; depth: number }> = [{ col: start, depth: 0 }];
+      while (queue.length > 0) {
+        const { col, depth } = queue.shift()!;
+        if (depth >= maxDepth) continue;
+
+        // Fields-based relations (m2o, o2m, m2m, m2a) as exposed on fields
+        const fields = await getFieldDefs(col);
+        for (const f of fields) {
+          const relCol: string | undefined = f?.meta?.related_collection || f?.related_collection;
+          const specials: string[] = Array.isArray(f?.meta?.special) ? f.meta.special : [];
+          if (!relCol || relCol === 'directus_files') continue;
+          if (!visited.has(relCol) && relCol !== start) {
+            visited.add(relCol);
+            queue.push({ col: relCol, depth: depth + 1 });
+          }
+          // For m2m, attempt to include junction collection if available on relation data
+        }
+
+        // Relations endpoint gives additional context including junctions
+        const rels = await getRelations(col);
+        for (const r of rels) {
+          const left = r?.collection;
+          const right = r?.related_collection;
+          const junction = r?.junction_collection || r?.meta?.junction_collection;
+          const add = (c?: string) => {
+            if (!c) return;
+            if (c === 'directus_files') return;
+            if (c === start) return;
+            if (!visited.has(c)) {
+              visited.add(c);
+              queue.push({ col: c, depth: depth + 1 });
+            }
+          };
+          add(left);
+          add(right);
+          add(junction);
+        }
+      }
+      return visited;
+    };
+
+    const depth = Math.max(1, Number(options?.relatedCollectionDepth || 1));
+    const allRelatedCollections = await resolveRelatedCollections(collectionName, depth);
 
     // Fetch related collection data if enabled
     const relatedData = new Map<string, any[]>();
     const relatedCollectionsList: string[] = [];
-    
-    if (options?.includeRelatedCollections !== false && relatedCollections.size > 0) {
-      console.log('Fetching related collections:', Array.from(relatedCollections));
-      
-      for (const relatedCollection of relatedCollections) {
+    if (allRelatedCollections.size > 0) {
+      console.log('Fetching related collections (depth', depth, '):', Array.from(allRelatedCollections));
+      for (const relatedCollection of allRelatedCollections) {
         try {
-          const relatedRes = await api.get(`/items/${relatedCollection}`, { 
+          const relatedRes = await api.get(`/items/${relatedCollection}`, {
             params: { limit: -1, fields: ['*', 'translations.*'] }
           });
           const relatedItems = relatedRes?.data?.data || [];
@@ -1155,7 +1267,7 @@ export async function exportCollectionAsZip(
           relatedCollectionsList.push(relatedCollection);
           console.log(`Fetched ${relatedItems.length} items from ${relatedCollection}`);
         } catch (error: any) {
-          console.warn(`Failed to fetch related collection ${relatedCollection}:`, error.message);
+          console.warn(`Failed to fetch related collection ${relatedCollection}:`, error?.message || error);
         }
       }
     }
@@ -1220,7 +1332,7 @@ export async function exportCollectionAsZip(
       items: items,
       exportedAt: new Date().toISOString(),
       options: {
-        includeRelatedCollections: options?.includeRelatedCollections !== false,
+        includeRelatedCollections: true,
         relatedCollectionDepth: options?.relatedCollectionDepth || 1
       }
     };
@@ -1273,7 +1385,7 @@ export async function downloadCollectionZip(
     filter?: any; 
     fields?: string[]; 
     includeDraft?: boolean;
-    includeRelatedCollections?: boolean;
+    // option removed; exporter always includes related collections
     relatedCollectionDepth?: number;
   },
 ): Promise<{
