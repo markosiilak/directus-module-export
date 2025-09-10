@@ -110,7 +110,7 @@
           </div>
         </div>
 
-        <div v-if="operationStatus && !dismissedStatus" class="status-display" :class="operationStatus.type">
+        <div v-if="operationStatus && !dismissedStatus" ref="statusDisplay" class="status-display" :class="operationStatus.type">
           <v-notice :type="operationStatus.type">
             Status: {{ operationStatus.status }} - {{ operationStatus.message }}
             <v-button small secondary icon="true" @click="dismissedStatus = true">
@@ -153,11 +153,10 @@
 </template>
 
 <script lang="ts">
-   
   import { useApi } from '@directus/extensions-sdk';
   import { defineComponent, onMounted, Ref, ref, watch } from 'vue';
 
-  import { downloadCollectionZip,importFromDirectus, validateDirectusToken } from './utils/apiHandlers';
+  import { downloadCollectionZip, importFromDirectus, validateDirectusToken } from './utils/apiHandlers';
 
   // Type definitions
   interface ApiError {
@@ -254,6 +253,7 @@
       dismissedStatus: Ref<boolean>;
       dismissedFilterInfo: Ref<boolean>;
       showTokenInfo: Ref<boolean>;
+      statusDisplay: Ref<HTMLElement | null>;
       customFilter: (item: string, queryText: string) => boolean;
       handleDomainSelect: (value: string) => void;
       handleTokenSelect: (value: string) => void;
@@ -291,6 +291,7 @@
       const dismissedStatus = ref<boolean>(false);
       const dismissedFilterInfo = ref<boolean>(false);
       const showTokenInfo = ref<boolean>(true);
+      const statusDisplay = ref<HTMLElement | null>(null);
 
       // Load histories from localStorage on mount
       onMounted(async (): Promise<void> => {
@@ -444,6 +445,21 @@
               type: 'info'
             };
           }
+        }
+      });
+
+      // Watch for operation status changes and scroll to status message
+      watch(operationStatus, (newStatus: OperationStatus | null): void => {
+        if (newStatus && !dismissedStatus.value) {
+          // Use nextTick to ensure DOM is updated before scrolling
+          setTimeout(() => {
+            if (statusDisplay.value) {
+              statusDisplay.value.scrollIntoView({
+                behavior: 'smooth',
+                block: 'start'
+              });
+            }
+          }, 100);
         }
       });
 
@@ -631,7 +647,7 @@
           setLoading('import', collectionName, true);
           operationStatus.value = null;
           const { importCollectionFromZip } = await import('./utils/apiHandlers');
-          const res = await importCollectionFromZip(api, collectionName, file);
+          const res = await importCollectionFromZip(api, collectionName, file, adminToken.value, selectedDomain.value);
           operationStatus.value = {
             status: res.success ? 200 : 500,
             message: res.message,
@@ -806,6 +822,7 @@
         dismissedStatus,
         dismissedFilterInfo,
         showTokenInfo,
+        statusDisplay,
         customFilter,
         handleDomainSelect,
         handleTokenSelect,

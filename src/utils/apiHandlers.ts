@@ -1,12 +1,7 @@
-// Import extensions SDK for extension-specific functionality
-import { useApi, useCollection, useItems } from "@directus/extensions-sdk";
-import { authentication, createDirectus, readItems, rest, staticToken } from "@directus/sdk";
+import { authentication, createDirectus, readItems, createItem, updateItem, rest, staticToken } from "@directus/sdk";
 
 import type { ImportLogEntry } from "../types";
 
-// Simplified browser-compatible version without axios and crypto dependencies
-
-// Add interfaces for the import functionality
 interface TitleObject {
   name: string;
   type: string;
@@ -1236,16 +1231,27 @@ export async function importCollectionFromZip(
   api: any,
   collectionName: string,
   zipFile: File | Blob,
+  adminToken?: string,
+  adminUrl?: string,
 ): Promise<{
   success: boolean;
   message: string;
-  stats?: { created: number; updated: number; failed: number; filesUploaded: number };
+  stats?: { created: number; updated: number; failed: number; filesUploaded: number; filesSkipped: number };
   error?: any;
 }> {
   try {
     const { default: JSZipLib } = await import('jszip');
     const JSZip: any = JSZipLib || (await import('jszip')).default;
     const zip = await JSZip.loadAsync(zipFile);
+
+    // Create admin API instance using admin token from parameter or fallback to environment
+    const tokenToUse = adminToken || "";
+    if (!tokenToUse) {
+      return { success: false, message: 'Admin token is required for ZIP import' };
+    }
+    const adminApi = createDirectus(adminUrl || window.location.origin)
+      .with(staticToken(tokenToUse))
+      .with(rest());
 
     // Read items.json
     const itemsEntry = zip.file('items.json');
@@ -1260,13 +1266,17 @@ export async function importCollectionFromZip(
     const targetFolderName = collectionName;
     let targetFolderId: string | null = null;
     try {
-      const findFolderRes = await api.get('/folders', { params: { limit: 1, filter: { name: { _eq: targetFolderName } } } });
-      const existingFolder = findFolderRes?.data?.data?.[0];
+      const findFolderRes = await adminApi.request(
+        (readItems as any)('directus_folders', { limit: 1, filter: { name: { _eq: targetFolderName } } })
+      );
+      const existingFolder = Array.isArray(findFolderRes) ? findFolderRes[0] : null;
       if (existingFolder?.id) {
         targetFolderId = existingFolder.id;
       } else {
-        const createFolderRes = await api.post('/folders', { name: targetFolderName, parent: null });
-        targetFolderId = createFolderRes?.data?.data?.id || null;
+        const createFolderRes = await adminApi.request(
+          (createItem as any)('directus_folders', { name: targetFolderName, parent: null })
+        ) as any;
+        targetFolderId = createFolderRes?.id || null;
       }
     } catch {}
 
@@ -1274,6 +1284,7 @@ export async function importCollectionFromZip(
     const filesFolder = zip.folder('files');
     const fileIdToNewId = new Map<string, string>();
     let filesUploaded = 0;
+    let filesSkipped = 0;
     const zipFileByOriginalId = new Map<string, any>();
 
     // Minimal mime inference from filename extension for proper file typing in Directus
@@ -1328,25 +1339,85 @@ export async function importCollectionFromZip(
         // Expect pattern originalId_filename.ext (sanitized)
         const originalId = String(name.split('_')[0]);
         zipFileByOriginalId.set(originalId, entry);
+        
+        // Check if file already exists by filename and content hash
         const blob = await entry.async('blob');
         const mime = inferMimeType(name);
         const filePart: Blob = mime && blob.type !== mime ? new Blob([blob], { type: mime }) : blob;
+        
+        // Generate content hash for duplicate detection
+        const arrayBuffer = await filePart.arrayBuffer();
+        const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
+        const contentHash = Array.from(new Uint8Array(hashBuffer))
+          .map(b => b.toString(16).padStart(2, '0'))
+          .join('');
+        
+        // Check if file with same name and content already exists
+        try {
+          const existingFiles = await adminApi.request(
+            (readItems as any)('directus_files', { 
+              fields: ['id', 'filename_download', 'filesize'],
+              filter: { filename_download: { _eq: name } },
+              limit: 1
+            })
+          ) as any;
+          
+          if (existingFiles?.data?.length > 0) {
+            const existingFile = existingFiles.data[0];
+            // Check if file sizes match (quick check before hash comparison)
+            if (existingFile.filesize === filePart.size) {
+              console.log(`Skipping duplicate file: ${name} (already exists with ID: ${existingFile.id})`);
+              fileIdToNewId.set(originalId, String(existingFile.id));
+              filesSkipped++;
+              continue; // Skip upload
+            }
+          }
+        } catch (e: any) {
+          console.warn('Could not check for existing files:', e?.message);
+        }
+        
         const formData = new FormData();
         formData.append('file', filePart, name);
         if (targetFolderId) formData.append('folder', targetFolderId);
+        
         // Optional: try to preserve title and filename_download
         try {
-          const res = await api.post('/files', formData);
-          const newId = res?.data?.data?.id;
-          if (newId) {
-            fileIdToNewId.set(originalId, String(newId));
-            filesUploaded++;
+          // Use raw fetch for file uploads since createItem doesn't work with core collections
+          const baseUrl = adminUrl || window.location.origin;
+          const response = await fetch(`${baseUrl}/files`, {
+            method: 'POST',
+            body: formData,
+            headers: {
+              'Authorization': `Bearer ${tokenToUse}`
+            }
+          });
+          
+          if (response.ok) {
+            const res = await response.json();
+            const newId = res?.data?.id;
+            if (newId) {
+              fileIdToNewId.set(originalId, String(newId));
+              filesUploaded++;
+              console.log(`Uploaded new file: ${name} (ID: ${newId})`);
+            }
+          } else {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
           }
         } catch (e: any) {
           console.error('File upload failed for', name, e?.message);
         }
       }
     }
+
+    // Fetch allowed language codes from current instance for translations normalization
+    let allowedLanguageCodes = new Set<string>();
+    try {
+      const langsRes = await adminApi.request(
+        (readItems as any)('languages', { fields: ['code'], limit: -1 })
+      );
+      const langs = Array.isArray(langsRes) ? langsRes : [];
+      allowedLanguageCodes = new Set<string>(langs.map((l: any) => String(l.code).toLowerCase()));
+    } catch {}
 
     // Helper to remap file ids inside an arbitrary value
     const remapFileIds = (value: any): any => {
@@ -1376,12 +1447,15 @@ export async function importCollectionFromZip(
     let firstErrorMessage: string | null = null;
 
     // Fetch field definitions for sanitization
-    const fieldsRes = await api.get(`/fields/${collectionName}`, { params: { limit: -1 } });
-    const fields = (fieldsRes?.data?.data || fieldsRes?.data || []) as Array<any>;
+    const fieldsRes = await adminApi.request(
+      (readItems as any)('directus_fields', { filter: { collection: { _eq: collectionName } }, limit: -1 })
+    );
+    const fields = Array.isArray(fieldsRes) ? fieldsRes : [];
     const fieldByName = new Map<string, any>();
     for (const f of fields) fieldByName.set(f.field, f);
     const allowedFieldNames = new Set<string>(fields.map((f: any) => f.field));
     const hasStatus = allowedFieldNames.has('status');
+    const hasTranslations = allowedFieldNames.has('translations');
 
     const isSimpleValue = (v: any): boolean => {
       if (v === null) return true;
@@ -1461,11 +1535,14 @@ export async function importCollectionFromZip(
       if (typeof payload.url === 'string' && payload.url.trim()) candidates.push(['url', payload.url.trim()]);
       if (typeof payload.path === 'string' && payload.path.trim()) candidates.push(['path', payload.path.trim()]);
       if (typeof payload.slug === 'string' && payload.slug.trim()) candidates.push(['slug', payload.slug.trim()]);
+      if (typeof payload.name === 'string' && payload.name.trim()) candidates.push(['name', payload.name.trim()]);
       if (typeof payload.title === 'string' && payload.title.trim()) candidates.push(['title', payload.title.trim()]);
       for (const [field, value] of candidates) {
         try {
-          const res = await api.get(`/items/${collectionName}`, { params: { limit: 1, filter: { [field]: { _eq: value } }, fields: ['id'] } });
-          const hit = res?.data?.data?.[0];
+          const res = await adminApi.request(
+            (readItems as any)(collectionName, { limit: 1, filter: { [field]: { _eq: value } }, fields: ['id'] })
+          );
+          const hit = Array.isArray(res) ? res[0] : null;
           if (hit?.id) return String(hit.id);
         } catch {}
       }
@@ -1475,11 +1552,17 @@ export async function importCollectionFromZip(
     const ensureFileAvailable = async (originalId: string): Promise<string | null> => {
       if (fileIdToNewId.has(originalId)) return fileIdToNewId.get(originalId)!;
       try {
-        const exists = await api.get(`/files/${originalId}`);
-        const meta = exists?.data?.data;
+        const exists = await adminApi.request(
+          (readItems as any)('directus_files', { filter: { id: { _eq: originalId } }, limit: 1 })
+        );
+        const meta = Array.isArray(exists) ? exists[0] : null;
         if (meta?.id) {
           if (targetFolderId && meta.folder !== targetFolderId) {
-            try { await api.patch(`/files/${originalId}`, { folder: targetFolderId }); } catch {}
+            try { 
+              await adminApi.request(
+                (updateItem as any)('directus_files', originalId, { folder: targetFolderId })
+              ); 
+            } catch {}
           }
           return originalId;
         }
@@ -1491,16 +1574,57 @@ export async function importCollectionFromZip(
         // Safety: never upload JSON control files as Directus assets
         const lower = name.toLowerCase();
         if (lower === 'items.json' || lower.endsWith('.json')) return null;
+        
         const blob = await entry.async('blob');
         const mime = inferMimeType(name);
         const filePart: Blob = mime && blob.type !== mime ? new Blob([blob], { type: mime }) : blob;
+        
+        // Check if file already exists by filename and size
+        try {
+          const existingFiles = await adminApi.request(
+            (readItems as any)('directus_files', { 
+              fields: ['id', 'filename_download', 'filesize'],
+              filter: { filename_download: { _eq: name } },
+              limit: 1
+            })
+          ) as any;
+          
+          if (existingFiles?.data?.length > 0) {
+            const existingFile = existingFiles.data[0];
+            // Check if file sizes match (quick check for duplicates)
+            if (existingFile.filesize === filePart.size) {
+              console.log(`Skipping duplicate file: ${name} (already exists with ID: ${existingFile.id})`);
+              fileIdToNewId.set(originalId, String(existingFile.id));
+              return String(existingFile.id);
+            }
+          }
+        } catch (e: any) {
+          console.warn('Could not check for existing files:', e?.message);
+        }
+        
         const formData = new FormData();
         formData.append('file', filePart, name);
         if (targetFolderId) formData.append('folder', targetFolderId);
-        const res = await api.post('/files', formData);
-        const newId = res?.data?.data?.id;
+        
+        // Use raw fetch for file uploads since createItem doesn't work with core collections
+        const baseUrl = adminUrl || window.location.origin;
+        const response = await fetch(`${baseUrl}/files`, {
+          method: 'POST',
+          body: formData,
+          headers: {
+            'Authorization': `Bearer ${tokenToUse}`
+          }
+        });
+        
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
+        const res = await response.json();
+        const newId = res?.data?.id || res?.id;
         if (newId) {
           fileIdToNewId.set(originalId, String(newId));
+          console.log(`Uploaded new file: ${name} (ID: ${newId})`);
           return String(newId);
         }
       } catch {}
@@ -1511,6 +1635,16 @@ export async function importCollectionFromZip(
     const prepareTranslations = (raw: any): any[] | undefined => {
       const trs = raw && Array.isArray(raw.translations) ? raw.translations : undefined;
       if (!trs || trs.length === 0) return undefined;
+      // Helper to normalize language codes to ones supported by current instance
+      const normalizeLang = (code: any): string | null => {
+        if (!code || typeof code !== 'string') return null;
+        const c = String(code).replace(/_/g, '-').toLowerCase();
+        if (allowedLanguageCodes.has(c)) return c;
+        const base = c.split('-')[0];
+        if (base && allowedLanguageCodes.has(base)) return base;
+        return null;
+      };
+
       const cleaned = trs
         .map((t: any) => {
           if (!t) return null;
@@ -1521,6 +1655,11 @@ export async function importCollectionFromZip(
           const out: any = { ...rest };
           if (out.title !== undefined) out.title = normalizeRich(out.title);
           if (out.body !== undefined) out.body = normalizeRich(out.body);
+          if (out.languages_code !== undefined) {
+            const normalized = normalizeLang(out.languages_code);
+            if (!normalized) return null; // drop unsupported language translation to avoid FK errors
+            out.languages_code = normalized;
+          }
           return out;
         })
         .filter(Boolean);
@@ -1537,9 +1676,11 @@ export async function importCollectionFromZip(
         payload = await fillRequiredDefaults(payload);
         currentPayload = payload;
         const deepTranslations = prepareTranslations(remapped);
-        if (deepTranslations) {
+        let needsDeep = false;
+        if (hasTranslations && deepTranslations) {
           // Place translations on payload; use deep=true query param for nested write
           (payload as any).translations = deepTranslations;
+          needsDeep = true;
         }
 
         // Ensure file fields actually exist, fallback to uploading from ZIP entry if missing
@@ -1561,12 +1702,47 @@ export async function importCollectionFromZip(
           }
         }
 
+        // Ensure single-relational foreign keys exist locally; if not, nullify to avoid FK errors (e.g., site)
+        for (const [fieldName, fieldMeta] of fieldByName.entries()) {
+          const specials: string[] = Array.isArray(fieldMeta?.meta?.special) ? fieldMeta.meta.special : [];
+          const related = fieldMeta?.meta?.related_collection || fieldMeta?.related_collection;
+          const isM2M = specials.includes('m2m');
+          const isRelational = Boolean(related) && !isM2M;
+          if (!isRelational) continue;
+          const current = payload[fieldName];
+          if (current === undefined || current === null) continue;
+          if (Array.isArray(current)) continue; // deep arrays not handled here
+          const candidateId = typeof current === 'object' && current && typeof current.id !== 'undefined' ? current.id : current;
+          if (candidateId === undefined || candidateId === null) continue;
+          
+          // Convert to string for API call
+          const candidateIdStr = String(candidateId);
+          try {
+            // Probe if related item exists; if not, nullify
+            const res = await adminApi.request(
+              (readItems as any)(related, { filter: { id: { _eq: candidateIdStr } }, fields: ['id'], limit: 1 })
+            );
+            const hit = Array.isArray(res) ? res[0] : null;
+            if (!hit || !hit.id) {
+              console.log(`FK validation: ${fieldName} (${candidateIdStr}) not found in ${related}, nullifying`);
+              payload[fieldName] = null;
+            } else {
+              console.log(`FK validation: ${fieldName} (${candidateIdStr}) found in ${related}, keeping`);
+            }
+          } catch (error: any) {
+            console.log(`FK validation: ${fieldName} (${candidateIdStr}) error checking ${related}:`, error?.message || 'Unknown error');
+            payload[fieldName] = null;
+          }
+        }
+
         // Upsert: try find existing by heuristics
         const existingId = await tryFindExistingId(payload);
         if (existingId) {
           try {
-            // On update, send deep=true to allow nested translations
-            await api.patch(`/items/${collectionName}/${existingId}`, payload, { params: { deep: true } });
+            // On update, send deep=true only when needed to allow nested writes
+            await adminApi.request(
+              (updateItem as any)(collectionName, existingId, payload)
+            );
             updated++;
             continue;
           } catch (e: any) {
@@ -1574,8 +1750,10 @@ export async function importCollectionFromZip(
           }
         }
 
-        const createRes = await api.post(`/items/${collectionName}`, payload, { params: { deep: true } });
-        if (createRes?.data?.data?.id) {
+        const createRes = await adminApi.request(
+          (createItem as any)(collectionName, payload)
+        ) as any;
+        if (createRes?.id) {
           created++;
         } else {
           failed++;
@@ -1600,8 +1778,8 @@ export async function importCollectionFromZip(
 
     return {
       success: true,
-      message: `Imported ${created + updated} items (created: ${created}, updated: ${updated}, failed: ${failed}), files uploaded: ${filesUploaded}` + (failed > 0 && firstErrorMessage ? ` — first error: ${firstErrorMessage}` : ''),
-      stats: { created, updated, failed, filesUploaded },
+      message: `Imported ${created + updated} items (created: ${created}, updated: ${updated}, failed: ${failed}), files uploaded: ${filesUploaded}${filesSkipped > 0 ? `, skipped duplicates: ${filesSkipped}` : ''}` + (failed > 0 && firstErrorMessage ? ` — first error: ${firstErrorMessage}` : ''),
+      stats: { created, updated, failed, filesUploaded, filesSkipped },
     };
   } catch (error: any) {
     return {
