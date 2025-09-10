@@ -1,3 +1,16 @@
+## [2.0.5] - 2025-09-10
+
+### Added
+- Export: Include full content of related collections in `items.json` (optional)
+- Export: UI controls to toggle related content and set depth (1-3)
+
+### Changed
+- Export ZIP now embeds `relatedCollections` alongside main `items`
+- Export stats show which related collections were included
+
+### Fixed
+- Type declarations for `file-saver` to satisfy TypeScript
+
 ## [2.0.2] - 2025-01-15
 
 ### Enhanced
