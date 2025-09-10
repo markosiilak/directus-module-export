@@ -1,3 +1,9 @@
+## [2.0.2] - 2025-01-15
+
+### Enhanced
+- Improved operation status handling for better user feedback
+- Enhanced ZIP import functionality with better error handling and status reporting
+
 ## [2.0.1] - 2025-09-02
 
 ### Fixed
