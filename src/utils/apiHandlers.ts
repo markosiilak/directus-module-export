@@ -201,13 +201,6 @@ export async function testCollectionAccess(
   error?: any;
 }> {
   try {
-    console.log("Testing collection access:", {
-      domain: selectedDomain,
-      collection: collectionName,
-      hasToken: !!adminToken,
-      tokenPrefix: adminToken.substring(0, 10) + "...",
-    });
-
     const normalizedToken = adminToken.replace(/^Bearer\s+/i, "");
     const sourceDirectus = createDirectus(selectedDomain)
       .with(staticToken(normalizedToken))
